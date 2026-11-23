@@ -1,0 +1,8 @@
+# Keep the upstream Python environment and parser dependencies unchanged.
+ARG DOCREADER_BASE
+FROM ${DOCREADER_BASE}
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.source="https://github.com/cuishengen/WeKnora" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}"
+COPY docreader/main.py /app/docreader/main.py
+COPY docreader/parser/pdf_parser.py /app/docreader/parser/pdf_parser.py

@@ -47,6 +47,35 @@ logger = logging.getLogger(__name__)
 _PDFIUM_LOCK = threading.Lock()
 
 
+def pdfium_error_metadata(error: Exception) -> dict[str, str]:
+    """Classify only typed PDF input rejections, without matching messages.
+
+    PdfiumError.err_code is supplied by document loading. Unknown errors,
+    file access errors, rendering failures without a code and dependency
+    failures remain operational errors for the caller to retry or stop.
+    """
+    try:
+        import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_raw
+    except ImportError:
+        return {}
+    if not isinstance(error, pdfium.PdfiumError):
+        return {}
+    reasons = {
+        pdfium_raw.FPDF_ERR_FORMAT: "pdf_invalid_format",
+        pdfium_raw.FPDF_ERR_PASSWORD: "pdf_password_required",
+        pdfium_raw.FPDF_ERR_SECURITY: "pdf_unsupported_security",
+    }
+    reason = reasons.get(error.err_code)
+    if reason is None:
+        return {}
+    return {
+        "error_kind": "document_content",
+        "error_source": "pdfium",
+        "error_code": reason,
+    }
+
+
 def _env_float(name: str, default: float) -> float:
     v = os.environ.get(name)
     if v is None or not str(v).strip():

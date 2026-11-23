@@ -4451,7 +4451,7 @@ func (s *knowledgeService) convert(
 		knowledge.ParseStatus = "failed"
 		knowledge.ErrorMessage = result.Error
 		if knowledge.IsStaged && !strings.HasPrefix(knowledge.ErrorMessage, stagedDocumentRejectionPrefix) &&
-			anydoc.PDFInvalidStructure(errors.New(result.Error)) {
+			(anydoc.PDFInvalidStructure(errors.New(result.Error)) || isPDFiumDocumentRejection(result)) {
 			knowledge.ErrorMessage = stagedDocumentRejectionPrefix + result.Error
 		}
 		knowledge.UpdatedAt = time.Now()
@@ -4475,6 +4475,21 @@ func (s *knowledgeService) convert(
 	}
 	s.endStage(ctx, knowledge.ID, types.StageDocReader, docOutput)
 	return result, nil
+}
+
+// The remote parser supplies this classification from PdfiumError.err_code.
+// Generic response text, transport failures and unknown codes never qualify.
+func isPDFiumDocumentRejection(result *types.ReadResult) bool {
+	if result == nil || result.Error == "" || result.Metadata["error_kind"] != "document_content" ||
+		result.Metadata["error_source"] != "pdfium" {
+		return false
+	}
+	switch result.Metadata["error_code"] {
+	case "pdf_invalid_format", "pdf_password_required", "pdf_unsupported_security":
+		return true
+	default:
+		return false
+	}
 }
 
 // callDocReaderWithTimeout wraps the DocReader RPC in a child context whose

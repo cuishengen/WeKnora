@@ -16,6 +16,7 @@ from docreader.auth import AuthInterceptor, TLSConfigError, load_tls_credentials
 from docreader import config
 from docreader.config import CONFIG
 from docreader.parser import Parser
+from docreader.parser.pdf_parser import pdfium_error_metadata
 from docreader.parser.stream import ParsedDocumentStream
 from docreader.preprocess import PreprocessLimits, PreprocessRunner
 from docreader.proto import docreader_pb2_grpc
@@ -258,7 +259,7 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                 error_msg = f"Error reading document: {e}"
                 logger.error(error_msg)
                 logger.info("Traceback: %s", traceback.format_exc())
-                return ReadResponse(error=str(e))
+                return ReadResponse(error=str(e), metadata=pdfium_error_metadata(e))
 
     def ReadStream(self, request: ReadRequest, context):
         """Yield metadata first, then images as each parser produces them."""
@@ -311,7 +312,9 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                 if parsed_stream is not None:
                     parsed_stream.close()
                 del request
-                yield ReadStreamResponse(meta=ReadStreamMeta(error=str(e)))
+                yield ReadStreamResponse(
+                    meta=ReadStreamMeta(error=str(e), metadata=pdfium_error_metadata(e))
+                )
                 return
 
             # PDF parser streams own a temporary source file; drop the request's

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_raw
 
 import docreader.parser.pdf_parser as pdf_parser
 from docreader.main import DocReaderServicer
@@ -37,6 +39,69 @@ class _NoopPreprocessRunner:
 
 
 class ReadStreamPDFTest(unittest.TestCase):
+    def test_malformed_pdf_preserves_typed_rejection_in_both_rpc_modes(self):
+        content = b"%PDF-1.7\ninvalid isolated candidate structure\n%%EOF\n"
+        service = DocReaderServicer(preprocess_runner=_NoopPreprocessRunner())
+        try:
+            for mode in ("unary", "stream"):
+                with self.subTest(mode=mode):
+                    request = ReadRequest(
+                        file_content=content,
+                        file_name="broken.pdf",
+                        file_type="pdf",
+                    )
+                    if mode == "unary":
+                        response = service.Read(request, None)
+                    else:
+                        frames = list(service.ReadStream(request, None))
+                        self.assertEqual(len(frames), 1)
+                        response = frames[0].meta
+                    self.assertTrue(response.error)
+                    self.assertEqual(dict(response.metadata), {
+                        "error_kind": "document_content",
+                        "error_source": "pdfium",
+                        "error_code": "pdf_invalid_format",
+                    })
+        finally:
+            service.close()
+
+    def test_typed_pdfium_codes_do_not_depend_on_error_text(self):
+        for code, reason in (
+            (pdfium_raw.FPDF_ERR_FORMAT, "pdf_invalid_format"),
+            (pdfium_raw.FPDF_ERR_PASSWORD, "pdf_password_required"),
+            (pdfium_raw.FPDF_ERR_SECURITY, "pdf_unsupported_security"),
+        ):
+            with self.subTest(code=code):
+                error = pdfium.PdfiumError("arbitrary localized detail", err_code=code)
+                metadata = pdf_parser.pdfium_error_metadata(error)
+                self.assertEqual(metadata["error_kind"], "document_content")
+                self.assertEqual(metadata["error_code"], reason)
+
+    def test_operational_failures_are_not_document_rejections(self):
+        same_text = "Failed to load document (PDFium: Data format error)."
+        failures = [
+            pdfium.PdfiumError(same_text, err_code=code)
+            for code in (None, pdfium_raw.FPDF_ERR_UNKNOWN, pdfium_raw.FPDF_ERR_FILE,
+                         pdfium_raw.FPDF_ERR_PAGE, -1)
+        ]
+        failures += [TimeoutError(same_text), OSError(same_text),
+                     PermissionError(same_text), MemoryError(same_text),
+                     RuntimeError(same_text)]
+        service = DocReaderServicer(preprocess_runner=_NoopPreprocessRunner())
+        try:
+            for error in failures:
+                with self.subTest(error=type(error).__name__, code=getattr(error, "err_code", None)):
+                    self.assertEqual(pdf_parser.pdfium_error_metadata(error), {})
+                    request = ReadRequest(file_content=b"doc", file_name="file.pdf", file_type="pdf")
+                    with patch.object(service.parser, "parse_file", side_effect=error):
+                        self.assertEqual(dict(service.Read(request, None).metadata), {})
+                    with patch.object(service.parser, "parse_file_stream", side_effect=error):
+                        frames = list(service.ReadStream(request, None))
+                        self.assertEqual(len(frames), 1)
+                        self.assertEqual(dict(frames[0].meta.metadata), {})
+        finally:
+            service.close()
+
     def test_metadata_precedes_lazy_scanned_page_rendering(self):
         config = ReadConfig()
         config.parser_engine_overrides["pdf_force_scanned"] = "true"
