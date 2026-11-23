@@ -10,6 +10,27 @@ import (
 )
 
 var comparisonIdentifier = regexp.MustCompile(`(?i)\b[a-z]{2,8}[0-9]{2,10}[a-z0-9_*-]*\b`)
+var comparisonExcludedClause = regexp.MustCompile(`(?i)^(不要|请勿|不将|不把|不包括|不包含|不计|排除|do not\b|don't\b|without\b|excluding\b|exclude\b)`)
+
+// The full question still drives the primary search and answer. In the
+// additional filename-scoped pass, excluded terms must not attract evidence
+// about the very item the user asked us to leave out.
+func comparisonRecallQuery(query string) string {
+	parts := strings.FieldsFunc(query, func(r rune) bool { return strings.ContainsRune("，,；;。\n", r) })
+	if len(parts) < 2 {
+		return query
+	}
+	kept := []string{parts[0]}
+	for _, part := range parts[1:] {
+		if !comparisonExcludedClause.MatchString(strings.TrimSpace(part)) {
+			kept = append(kept, part)
+		}
+	}
+	if len(kept) == len(parts) {
+		return query
+	}
+	return strings.Join(kept, "，")
+}
 
 // Keep literal product identifiers, without embedding any model names or facts.
 func comparisonObjects(query string) []string {
@@ -46,9 +67,15 @@ func (p *PluginSearch) searchComparison(ctx context.Context, cm *types.ChatManag
 		if query == "" {
 			query = cm.Query
 		}
+		recallQuery := comparisonRecallQuery(cm.Query)
+		if recallQuery == cm.Query {
+			recallQuery = query
+		}
 		for _, other := range objects {
 			if !strings.EqualFold(other, object) {
-				query = regexp.MustCompile("(?i)"+regexp.QuoteMeta(other)).ReplaceAllString(query, " ")
+				pattern := regexp.MustCompile("(?i)" + regexp.QuoteMeta(other))
+				query = pattern.ReplaceAllString(query, " ")
+				recallQuery = pattern.ReplaceAllString(recallQuery, " ")
 			}
 		}
 		copyCM := *cm
@@ -84,7 +111,7 @@ func (p *PluginSearch) searchComparison(ctx context.Context, cm *types.ChatManag
 				continue
 			}
 			found, err := p.knowledgeBaseService.HybridSearch(ctx, target.KnowledgeBaseID, types.SearchParams{
-				QueryText: query, KnowledgeIDs: ids, MatchCount: copyCM.EmbeddingTopK, SkipContextEnrichment: true,
+				QueryText: recallQuery, KnowledgeIDs: ids, MatchCount: copyCM.EmbeddingTopK, SkipContextEnrichment: true,
 				DisableVectorMatch: cm.DisableVectorMatch, DisableKeywordsMatch: cm.DisableKeywordsMatch,
 			})
 			if err == nil {
