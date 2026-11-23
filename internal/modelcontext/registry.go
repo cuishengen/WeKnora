@@ -332,6 +332,8 @@ func (r *Registry) ModelToolResultForTool(toolName string, result *types.ToolRes
 	// ID in validation errors or status text. Compact only explicitly declared
 	// built-ins; dynamic MCP output remains fully opaque.
 	if sourceCompactionAllowed(toolName) {
+		// Protect complete application URLs before compacting their document IDs.
+		modelOutput = r.resources.EncodeText(modelOutput)
 		modelOutput = r.sources.CompactKnownText(modelOutput)
 	}
 	if result.Success && (toolName == "call_mcp_tool" || strings.HasPrefix(toolName, "mcp_")) {

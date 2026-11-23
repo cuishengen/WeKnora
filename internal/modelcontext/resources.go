@@ -32,7 +32,7 @@ var storedRefRE = regexp.MustCompile(
 	`resource://[0-9A-Za-z_-]{22}|` +
 		`(?:storage://[0-9A-Za-z_-]+/)?` +
 		`(?:local|minio|cos|tos|s3|oss|ks3|obs)://[^\s)\]>"']+|` +
-		`summary/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`,
+		`(?:summary/|/platform/source-download/)[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`,
 )
 
 // resourceHandleShapeRE matches the handle syntax produced by EncodeText. It

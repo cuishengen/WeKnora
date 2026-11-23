@@ -46,6 +46,24 @@ func TestRegistryProtocolOwnsResourceHandleRules(t *testing.T) {
 	require.Contains(t, prompt, "res://NNNN")
 }
 
+func TestSourceDownloadLinkSurvivesStructuredRetrieval(t *testing.T) {
+	const id = "36283d3d-a495-40d2-a13f-e925fc322996"
+	const link = "/platform/source-download/" + id
+	registry := NewRegistry(true)
+	registry.RegisterDocument(id)
+	result := &types.ToolResult{Success: true, Data: map[string]interface{}{
+		"display_type": "search_results",
+		"results": []map[string]interface{}{{
+			"id": "chunk-download", "knowledge_id": id, "knowledge_base_id": "kb-download",
+			"knowledge_title": "tool.zip", "content": "原件下载链接：" + link,
+		}},
+	}}
+	output := registry.ModelToolResultForTool("knowledge_search", result)
+	require.Contains(t, output, "原件下载链接：res://0001")
+	require.NotContains(t, output, "/platform/source-download/doc://")
+	require.Equal(t, "[下载]("+link+")", registry.DecodeOutputText("[下载](res://0001)"))
+}
+
 func TestOutputFilesAreRenderedOnlyForLiveModelResults(t *testing.T) {
 	result := &types.ToolResult{Success: true, Output: "generated", OutputFiles: []string{"sandbox:比赛信息.pptx"}}
 	registry := NewRegistry(true)
