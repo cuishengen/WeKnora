@@ -136,6 +136,8 @@ func (p *PluginSearch) OnEvent(ctx context.Context,
 	chatManage.SearchResult = allResults
 	if len(comparisonObjects(chatManage.Query)) > 1 {
 		chatManage.SearchResult = append(chatManage.SearchResult, p.searchComparison(ctx, chatManage)...)
+		// Dedup keeps the first occurrence; preserve the strongest recall of a chunk.
+		sortSearchResultsDeterministically(chatManage.SearchResult)
 	}
 
 	logSearchScoreSample(ctx, "result_score_before_normalize", chatManage.SearchResult)
