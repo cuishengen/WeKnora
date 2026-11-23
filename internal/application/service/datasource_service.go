@@ -251,7 +251,8 @@ func (s *DataSourceService) updateDataSource(
 	// when there are no stored credentials yet (validators would fail with
 	// no token to call the live API) and when the parsed config is
 	// structurally identical.
-	configActuallyChanged := true
+	// A sync-settings PATCH omits Config when the selection is unchanged.
+	configActuallyChanged := len(ds.Config) > 0
 	if mergedCfg != nil && existingParsedCfg != nil {
 		configActuallyChanged = !reflect.DeepEqual(*mergedCfg, *existingParsedCfg)
 	}

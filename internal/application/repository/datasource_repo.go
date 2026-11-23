@@ -110,17 +110,28 @@ func (r *DataSourceRepository) UpdateSyncState(ctx context.Context, ds *types.Da
 	if ds.ID == "" {
 		return errors.New("data source id is empty")
 	}
+	updates := map[string]interface{}{
+		"status":           ds.Status,
+		"last_sync_at":     ds.LastSyncAt,
+		"last_sync_cursor": ds.LastSyncCursor,
+		"last_sync_result": ds.LastSyncResult,
+		"error_message":    ds.ErrorMessage,
+		"updated_at":       time.Now().UTC(),
+	}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		// A long NAS run owns progress, while pause/resume owns the current
+		// scheduling intent. Its stale snapshot must not undo an operator action.
+		if ds.Status == types.DataSourceStatusPaused {
+			delete(updates, "status")
+		} else {
+			updates["status"] = gorm.Expr("CASE WHEN status = ? THEN status ELSE ? END",
+				types.DataSourceStatusPaused, ds.Status)
+		}
+	}
 	if err := r.db.WithContext(ctx).
 		Model(&types.DataSource{}).
 		Where("id = ?", ds.ID).
-		Updates(map[string]interface{}{
-			"status":           ds.Status,
-			"last_sync_at":     ds.LastSyncAt,
-			"last_sync_cursor": ds.LastSyncCursor,
-			"last_sync_result": ds.LastSyncResult,
-			"error_message":    ds.ErrorMessage,
-			"updated_at":       time.Now().UTC(),
-		}).Error; err != nil {
+		Updates(updates).Error; err != nil {
 		return err
 	}
 	return nil

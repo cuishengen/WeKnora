@@ -51,6 +51,49 @@ func TestDataSourceRepositoryUpdateSyncStateClearsErrorMessage(t *testing.T) {
 	require.NotNil(t, stored.LastSyncAt)
 }
 
+func TestNASWorkerSyncStatePreservesConcurrentPauseResume(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		connectorType string
+		snapshot      string
+		current       string
+		desired       string
+		want          string
+	}{
+		{"paused worker after manual resume", types.ConnectorTypeDokuWikiFilesystem, types.DataSourceStatusPaused, types.DataSourceStatusActive, types.DataSourceStatusPaused, types.DataSourceStatusActive},
+		{"active worker after manual pause", types.ConnectorTypeDokuWikiFilesystem, types.DataSourceStatusActive, types.DataSourceStatusPaused, types.DataSourceStatusActive, types.DataSourceStatusPaused},
+		{"fatal after manual pause", types.ConnectorTypeDokuWikiFilesystem, types.DataSourceStatusActive, types.DataSourceStatusPaused, types.DataSourceStatusError, types.DataSourceStatusPaused},
+		{"fatal current active remains error", types.ConnectorTypeDokuWikiFilesystem, types.DataSourceStatusActive, types.DataSourceStatusActive, types.DataSourceStatusError, types.DataSourceStatusError},
+		{"other connector retains previous behavior", types.ConnectorTypeFeishu, types.DataSourceStatusActive, types.DataSourceStatusPaused, types.DataSourceStatusActive, types.DataSourceStatusActive},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupDataSourceRepoTestDB(t)
+			repo := NewDataSourceRepository(db)
+			ctx := context.Background()
+			worker := &types.DataSource{ID: "worker", TenantID: 1, KnowledgeBaseID: "kb", Type: test.connectorType, Status: test.snapshot}
+			require.NoError(t, repo.Create(ctx, worker))
+			// The worker already holds its snapshot when an operator changes status.
+			require.NoError(t, db.Model(&types.DataSource{}).Where("id = ?", worker.ID).Update("status", test.current).Error)
+			for _, stage := range []string{"checkpoint", "final"} {
+				worker.Status = test.desired
+				worker.LastSyncCursor = types.JSON(`{"stage":"` + stage + `"}`)
+				worker.LastSyncResult = types.JSON(`{"created":2}`)
+				worker.ErrorMessage = ""
+				if test.desired == types.DataSourceStatusError {
+					worker.ErrorMessage = "fatal source failure"
+				}
+				require.NoError(t, repo.UpdateSyncState(ctx, worker))
+				stored, err := repo.FindByID(ctx, worker.ID)
+				require.NoError(t, err)
+				require.Equal(t, test.want, stored.Status, stage)
+				require.Equal(t, worker.LastSyncCursor, stored.LastSyncCursor, stage)
+				require.Equal(t, worker.LastSyncResult, stored.LastSyncResult, stage)
+				require.Equal(t, worker.ErrorMessage, stored.ErrorMessage, stage)
+			}
+		})
+	}
+}
+
 func TestDataSourceRepositoryUpdatePersistsDisabledSyncDeletions(t *testing.T) {
 	db := setupDataSourceRepoTestDB(t)
 	repo := NewDataSourceRepository(db)
