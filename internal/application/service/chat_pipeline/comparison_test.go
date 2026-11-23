@@ -27,11 +27,36 @@ func TestComparisonEvidenceSurvivesOneFamilyDominatingScores(t *testing.T) {
 type comparisonScopeService struct {
 	interfaces.KnowledgeService
 	called bool
+	files  []*types.Knowledge
 }
 
 func (s *comparisonScopeService) SearchKnowledgeForScopes(context.Context, []types.KnowledgeSearchScope, string, int, int, []string) ([]*types.Knowledge, bool, int64, error) {
 	s.called = true
-	return nil, false, 0, nil
+	return s.files, false, int64(len(s.files)), nil
+}
+
+func TestFilenameScopedComparisonKeepsPredicateWithoutRepeatingWildcard(t *testing.T) {
+	kbs := &recordingSearchKnowledgeBaseService{}
+	files := &comparisonScopeService{files: []*types.Knowledge{{ID: "member", TenantID: 1,
+		KnowledgeBaseID: "kb-1", ParseStatus: types.ParseStatusCompleted}}}
+	plugin := &PluginSearch{knowledgeBaseService: kbs, knowledgeService: files}
+	cm := &types.ChatManage{PipelineRequest: types.PipelineRequest{TenantID: 1,
+		Query: "比较 AB571x、AB572x 在双MIC方案下的 RAM，不要额外加入 cache", EmbeddingTopK: 12,
+		SearchTargets: types.SearchTargets{{Type: types.SearchTargetTypeKnowledgeBase, KnowledgeBaseID: "kb-1"}}}}
+	plugin.searchComparison(context.Background(), cm)
+	var scoped int
+	for _, query := range kbs.params {
+		if len(query.KnowledgeIDs) == 0 {
+			continue
+		}
+		scoped++
+		require.NotContains(t, strings.ToLower(query.QueryText), "ab571x")
+		require.NotContains(t, strings.ToLower(query.QueryText), "ab572x")
+		require.Contains(t, query.QueryText, "双MIC方案")
+		require.Contains(t, query.QueryText, "RAM")
+		require.Contains(t, query.QueryText, "不要额外加入 cache")
+	}
+	require.Equal(t, 2, scoped)
 }
 
 func TestComparisonPreservesExplicitDocumentsAndPredicate(t *testing.T) {

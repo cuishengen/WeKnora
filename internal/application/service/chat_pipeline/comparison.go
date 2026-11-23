@@ -83,8 +83,11 @@ func (p *PluginSearch) searchComparison(ctx context.Context, cm *types.ChatManag
 			if len(ids) == 0 {
 				continue
 			}
+			// The document IDs already identify this family. Repeating its
+			// wildcard name in BM25 favors directory pages over the requested fact.
+			scopedQuery := regexp.MustCompile("(?i)"+regexp.QuoteMeta(object)).ReplaceAllString(query, " ")
 			found, err := p.knowledgeBaseService.HybridSearch(ctx, target.KnowledgeBaseID, types.SearchParams{
-				QueryText: query, KnowledgeIDs: ids, MatchCount: copyCM.EmbeddingTopK, SkipContextEnrichment: true,
+				QueryText: scopedQuery, KnowledgeIDs: ids, MatchCount: copyCM.EmbeddingTopK, SkipContextEnrichment: true,
 				DisableVectorMatch: cm.DisableVectorMatch, DisableKeywordsMatch: cm.DisableKeywordsMatch,
 			})
 			if err == nil {
