@@ -2,6 +2,7 @@
 // Falls back to the raw cron expression for unknown patterns.
 
 const CRON_PRESET_MAP: Record<string, string> = {
+  'CRON_TZ=Asia/Shanghai 0 0 1 * * *': 'datasource.dokuwiki.daily',
   '0 */30 * * * *': 'datasource.scheduleHuman.30min',
   '0 0 * * * *': 'datasource.scheduleHuman.1h',
   '0 0 */6 * * *': 'datasource.scheduleHuman.6h',
