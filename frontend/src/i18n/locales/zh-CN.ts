@@ -1208,6 +1208,24 @@ export default {
     connectionFailed: '连接失败',
     isRequired: '为必填项',
     credentialsLabel: '凭证',
+    dokuwiki: {
+      settingsStep: "来源设置",
+      source: "资料来源",
+      sourceVendor: "原厂 Wiki（NAS）",
+      sourceHint: "直接读取已配置的 Wiki 镜像，无需填写 Wiki 账号或密码。",
+      sourceRequired: "请选择可用的 Wiki 来源。",
+      formats: "文档格式",
+      pageFormat: "Wiki 正文 / TXT",
+      formatsHint: "压缩包和图片不会作为已解析正文导入。",
+      formatsRequired: "请至少选择一种支持的文档格式。",
+      resourceHint: "选择要同步的命名空间；勾选根目录可同步整个来源。",
+      resourceRequired: "请至少选择一个命名空间。",
+      emptyHint: "未找到可用命名空间，请检查所选来源或联系维护者后重新加载。",
+      daily: "每天 01:00（北京时间）",
+      manual: "仅手动同步",
+      scheduleHint: "自动同步按北京时间执行，也可随时点击“立即同步”。",
+      deletionsHint: "暂不支持同步源端删除，已有文档会保留。",
+    },
     gitlab: {
       baseUrl: 'GitLab 地址',
       accessToken: '个人访问令牌',
@@ -1377,6 +1395,7 @@ export default {
       cloudFolderLimitation: 'Confluence Cloud 暂不支持在此列出空间顶层文件夹等容器下的页面；选择整个空间仍会同步它们。'
     },
     connectorDesc: {
+      dokuwiki_filesystem: "同步 NAS 原厂 Wiki 镜像中的正文和附件",
       feishu: '同步飞书知识库中的文档、表格、文件',
       lark: '同步 Lark 知识库中的文档、表格、文件（飞书国际版）',
       feishu_drive: "同步飞书云盘文件夹中的文档、表格、文件",
@@ -1391,6 +1410,7 @@ export default {
       seafile: '同步 Seafile 资料库中的目录与文件'
     },
     connector: {
+      dokuwiki_filesystem: 'DokuWiki (NAS)',
       feishu: '飞书',
       lark: 'Lark（飞书国际版）',
       feishu_drive: "飞书云盘",
@@ -8522,6 +8542,7 @@ export default {
     channelYuque: '语雀',
     channelGitLab: 'GitLab',
     channelSeafile: 'Seafile',
+    channelDokuWiki: 'DokuWiki (NAS)',
     channelIma: '腾讯 IMA',
     channelUpload: '上传',
     channelManual: '手动',

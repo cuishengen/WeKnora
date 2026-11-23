@@ -1208,6 +1208,24 @@ export default {
     connectionFailed: 'Подключение не удалось',
     isRequired: 'обязательно для заполнения',
     credentialsLabel: 'учётные данные',
+    dokuwiki: {
+      settingsStep: "Source settings",
+      source: "Source",
+      sourceVendor: "Vendor Wiki (NAS)",
+      sourceHint: "Read the configured Wiki mirror directly. No Wiki account or password is required.",
+      sourceRequired: "Select an available Wiki source.",
+      formats: "Document formats",
+      pageFormat: "Wiki pages / TXT",
+      formatsHint: "Archives and images are not treated as parsed text.",
+      formatsRequired: "Select at least one supported document format.",
+      resourceHint: "Select the namespaces to sync. Select the root to include the entire source.",
+      resourceRequired: "Select at least one namespace.",
+      emptyHint: "No namespaces are available. Check the selected source or contact its maintainer, then reload.",
+      daily: "Daily at 01:00 (Asia/Shanghai)",
+      manual: "Manual only",
+      scheduleHint: "Automatic sync uses Beijing time. You can also choose Sync now at any time.",
+      deletionsHint: "Source deletion sync is not supported yet. Existing documents are retained.",
+    },
     gitlab: {
       baseUrl: 'URL GitLab', accessToken: 'Персональный токен доступа', projects: 'Проекты GitLab',
       projectsHint: 'Укажите ID проекта или путь в пространстве имён (например group/project), а также при необходимости ветку и каталоги.',
@@ -1375,6 +1393,7 @@ export default {
       cloudFolderLimitation: 'Confluence Cloud пока не может показать здесь страницы из папок верхнего уровня пространства; при выборе всего пространства они будут синхронизированы.'
     },
     connectorDesc: {
+      dokuwiki_filesystem: "Sync pages and documents from the NAS Wiki mirror",
       feishu: 'Синхронизация документов, таблиц и файлов из Feishu Wiki',
       lark: 'Синхронизация документов, таблиц и файлов из Lark Wiki',
       feishu_drive: 'Синхронизация документов, таблиц и файлов из папки Feishu Drive',
@@ -1389,6 +1408,7 @@ export default {
       seafile: 'Синхронизация папок и файлов из библиотек Seafile'
     },
     connector: {
+      dokuwiki_filesystem: 'DokuWiki (NAS)',
       feishu: 'Feishu (Фэйшу)',
       lark: 'Lark',
       feishu_drive: 'Feishu Drive',
@@ -8521,6 +8541,7 @@ export default {
     channelYuque: 'Yuque',
     channelGitLab: 'GitLab',
     channelSeafile: 'Seafile',
+    channelDokuWiki: 'DokuWiki (NAS)',
     channelIma: 'Tencent IMA',
     channelUpload: 'Загрузка',
     channelManual: 'Вручную',

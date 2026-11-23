@@ -205,6 +205,42 @@ const form = ref({
   sync_deletions: true,
 })
 
+function isDokuWikiConnector(type: string): boolean {
+  return type === 'dokuwiki_filesystem'
+}
+
+const dokuwikiFileTypes = ['txt', 'pdf', 'xlsx', 'xls', 'docx']
+const dokuwikiSelectedFileTypes = computed<string[]>({
+  get: () => form.value.config.settings.file_types ?? [...dokuwikiFileTypes],
+  set: fileTypes => {
+    form.value.config.settings = { ...form.value.config.settings, file_types: fileTypes }
+  },
+})
+
+function invalidateDokuWikiConnection() {
+  testResult.value = ''
+  testErrorMsg.value = ''
+  resources.value = []
+  expandedResourceIds.value = new Set()
+  loadedChildrenIds.value = new Set()
+  loadingChildrenIds.value = new Set()
+  treeFullyLoaded.value = false
+}
+
+function validateDokuWikiSettings(): boolean {
+  if (!isDokuWikiConnector(form.value.type)) return true
+  if (form.value.config.settings.source_alias !== 'vendor-wiki') {
+    MessagePlugin.warning(t('datasource.dokuwiki.sourceRequired'))
+    return false
+  }
+  const selected = dokuwikiSelectedFileTypes.value
+  if (!Array.isArray(selected) || selected.length === 0 || selected.some(type => !dokuwikiFileTypes.includes(type))) {
+    MessagePlugin.warning(t('datasource.dokuwiki.formatsRequired'))
+    return false
+  }
+  return true
+}
+
 // Yuque folder layout. The key lives in the raw settings bag, and a data source
 // created before this control existed carries no folder_mode at all — the
 // getter therefore reports the connector's own default (flat) rather than
@@ -567,7 +603,10 @@ const prereqExpanded = ref(false)
 const tempDsId = ref('')
 
 // Schedule presets
-const schedulePresets = computed(() => [
+const schedulePresets = computed(() => isDokuWikiConnector(form.value.type) ? [
+  { label: t('datasource.dokuwiki.daily'), value: 'CRON_TZ=Asia/Shanghai 0 0 1 * * *' },
+  { label: t('datasource.dokuwiki.manual'), value: '' },
+] : [
   { label: t('datasource.schedule30min'), value: '0 */30 * * * *' },
   { label: t('datasource.schedule1h'), value: '0 0 * * * *' },
   { label: t('datasource.schedule6h'), value: '0 0 */6 * * *' },
@@ -596,6 +635,15 @@ interface ConnectorDef {
 }
 
 const connectorDefs = computed<ConnectorDef[]>(() => [
+  {
+    type: 'dokuwiki_filesystem',
+    available: true,
+    docUrl: '',
+    permissionDocUrl: '',
+    permissionPageUrl: '',
+    requiredPermissions: [],
+    fields: [],
+  },
   {
     type: 'feishu',
     available: true,
@@ -865,6 +913,7 @@ watch(visible, async (v) => {
       sync_deletions: props.dataSource.sync_deletions,
     }
     selectedResourceIds.value = form.value.config?.resource_ids || []
+    if (isDokuWikiConnector(form.value.type)) form.value.sync_deletions = false
     if (isGitLabConnector(form.value.type)) {
       const savedProjects = Array.isArray(form.value.config.settings.projects) ? form.value.config.settings.projects : []
       gitlabProjects.value = savedProjects.map((project: any) => ({
@@ -935,9 +984,23 @@ watch(
 
 function selectType(def: ConnectorDef) {
   if (!def.available) return
+  const wasDokuWiki = isDokuWikiConnector(form.value.type)
   form.value.type = def.type
   form.value.name = t(`datasource.connector.${def.type}`)
   form.value.config.credentials = def.type === "confluence" ? { edition: "server" } : {}
+  if (isDokuWikiConnector(def.type)) {
+    form.value.config.settings = { source_alias: 'vendor-wiki', file_types: [...dokuwikiFileTypes] }
+    form.value.config.resource_ids = ['namespace:']
+    selectedResourceIds.value = ['namespace:']
+    form.value.sync_schedule = 'CRON_TZ=Asia/Shanghai 0 0 1 * * *'
+    form.value.sync_deletions = false
+  } else if (wasDokuWiki) {
+    form.value.config.settings = {}
+    form.value.config.resource_ids = []
+    selectedResourceIds.value = []
+    form.value.sync_schedule = '0 0 */6 * * *'
+    form.value.sync_deletions = true
+  }
   if (isFeishuFamilyConnector(def.type)) {
     form.value.config.settings.parse_mode = form.value.config.settings.parse_mode || 'blocks'
   } else {
@@ -964,6 +1027,7 @@ async function testConnection() {
   syncRssAuthHeadersToCredentials()
   syncConfluencePublicFieldsToSettings()
   if (!validateRssFeedUrls()) return
+  if (!validateDokuWikiSettings()) return
   if (!isEdit.value || !credentialsConfigured.value || replaceCredentialsMode.value) {
     const fields = displayedCredentialFields.value
     for (const f of fields) {
@@ -982,7 +1046,11 @@ async function testConnection() {
     // The main update endpoint ignores credentials. Only use the saved
     // connection when keeping its credentials; test replacements directly
     // without persisting them until the user saves the data source.
-    if (isEdit.value && tempDsId.value && !needsConnectionTest()) {
+    if (isDokuWikiConnector(form.value.type)) {
+      const id = await ensureTempDataSource(true)
+      if (!id) return
+      await validateConnection(id)
+    } else if (isEdit.value && tempDsId.value && !needsConnectionTest()) {
       await updateDataSource(tempDsId.value, {
         ...form.value,
         knowledge_base_id: props.kbId,
@@ -1002,8 +1070,9 @@ async function testConnection() {
     testResult.value = 'error'
     testErrorMsg.value = e?.message || e?.error || ''
     MessagePlugin.error(t('datasource.testFailed'))
+  } finally {
+    testing.value = false
   }
-  testing.value = false
 }
 
 // --- Load resources ---
@@ -1266,6 +1335,7 @@ function validateRssFeedUrls(): boolean {
 function validateStep1Fields(): boolean {
   syncRssAuthHeadersToCredentials()
   if (!validateRssFeedUrls()) return false
+  if (!validateDokuWikiSettings()) return false
   if (isEdit.value && credentialsConfigured.value && !replaceCredentialsMode.value) {
     return true
   }
@@ -1308,6 +1378,10 @@ async function nextStep() {
   // Seafile has no "whole account" scope: the backend rejects an empty selection.
   if (step.value === 2 && isSeafileConnector(form.value.type) && selectedResourceIds.value.length === 0) {
     MessagePlugin.warning(t('datasource.seafile.selectionRequired'))
+    return
+  }
+  if (step.value === 2 && isDokuWikiConnector(form.value.type) && selectedResourceIds.value.length === 0) {
+    MessagePlugin.warning(t('datasource.dokuwiki.resourceRequired'))
     return
   }
   step.value++
@@ -1376,6 +1450,14 @@ async function commitCredentialsIfNeeded(dsId: string): Promise<boolean> {
 
 // --- Final submit ---
 async function handleSubmit() {
+  if (!validateDokuWikiSettings()) return
+  if (isDokuWikiConnector(form.value.type)) {
+    if (selectedResourceIds.value.length === 0) {
+      MessagePlugin.warning(t('datasource.dokuwiki.resourceRequired'))
+      return
+    }
+    form.value.sync_deletions = false
+  }
   form.value.config.resource_ids = selectedResourceIds.value
   submitting.value = true
   try {
@@ -1457,6 +1539,7 @@ function resourceIconName(r: Resource): string {
   // Seafile libraries expand like folders but are the top-level unit a data
   // source binds to, so they keep the root icon.
   if (r.type === 'library') return 'root-list'
+  if (r.type === 'namespace') return 'folder'
   if (r.has_children) return 'folder'
   switch (r.type) {
     case 'wiki_space':
@@ -1506,7 +1589,7 @@ function resourceRowState(id: string): CheckState {
 
 const stepTitles = computed(() => [
   t('datasource.step.selectType'),
-  t('datasource.step.credentials'),
+  isDokuWikiConnector(form.value.type) ? t('datasource.dokuwiki.settingsStep') : t('datasource.step.credentials'),
   t('datasource.step.resources'),
   t('datasource.step.strategy'),
 ])
@@ -1725,7 +1808,27 @@ const drawerConfirmText = computed(() => {
         </div>
       </section>
 
-      <section class="setting-drawer__section">
+      <section v-if="isDokuWikiConnector(form.type)" class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.dokuwiki.settingsStep') }}</h4>
+        <div class="form-item">
+          <label class="form-label required">{{ t('datasource.dokuwiki.source') }}</label>
+          <t-select v-model="form.config.settings.source_alias" @change="invalidateDokuWikiConnection">
+            <t-option value="vendor-wiki" :label="t('datasource.dokuwiki.sourceVendor')" />
+          </t-select>
+          <p class="form-desc">{{ t('datasource.dokuwiki.sourceHint') }}</p>
+        </div>
+        <div class="form-item">
+          <label class="form-label required">{{ t('datasource.dokuwiki.formats') }}</label>
+          <t-checkbox-group v-model="dokuwikiSelectedFileTypes" @change="invalidateDokuWikiConnection">
+            <t-checkbox v-for="type in dokuwikiFileTypes" :key="type" :value="type">
+              {{ type === 'txt' ? t('datasource.dokuwiki.pageFormat') : type.toUpperCase() }}
+            </t-checkbox>
+          </t-checkbox-group>
+          <p class="form-desc">{{ t('datasource.dokuwiki.formatsHint') }}</p>
+        </div>
+      </section>
+
+      <section v-if="!isDokuWikiConnector(form.type)" class="setting-drawer__section">
         <h4 class="setting-drawer__section-title">{{ t('datasource.credentialsLabel') }}</h4>
 
         <div v-if="isEdit && credentialsConfigured && !replaceCredentialsMode" class="form-item">
@@ -1895,7 +1998,7 @@ const drawerConfirmText = computed(() => {
       </template>
       <template v-else>
       <h4 class="setting-drawer__section-title">{{ t('datasource.step.resources') }}</h4>
-      <p class="ds-resource-hint">{{ t('datasource.resourceHint') }}</p>
+      <p class="ds-resource-hint">{{ isDokuWikiConnector(form.type) ? t('datasource.dokuwiki.resourceHint') : t('datasource.resourceHint') }}</p>
 
       <!-- Drive (云盘) root input: shown alongside the tree (not as a switch).
            The user supplies a folder_token (or a Drive folder URL) and clicks
@@ -2035,8 +2138,8 @@ const drawerConfirmText = computed(() => {
       <div v-else class="ds-resource-empty">
         <t-icon name="info-circle" size="32px" style="color: var(--td-warning-color); margin-bottom: 8px;" />
         <p class="ds-empty-title">{{ t('datasource.noResources') }}</p>
-        <p class="ds-empty-desc">{{ t(`datasource.noResourcesDesc_${form.type}`, t('datasource.noResourcesDesc')) }}</p>
-        <div class="ds-guide-steps">
+        <p class="ds-empty-desc">{{ isDokuWikiConnector(form.type) ? t('datasource.dokuwiki.emptyHint') : t(`datasource.noResourcesDesc_${form.type}`, t('datasource.noResourcesDesc')) }}</p>
+        <div v-if="!isDokuWikiConnector(form.type)" class="ds-guide-steps">
           <div class="ds-guide-step">
             <span class="ds-guide-num">1</span>
             <span>{{ t(`datasource.guideStep1_${form.type}`, t('datasource.guideStep1')) }}</span>
@@ -2076,6 +2179,7 @@ const drawerConfirmText = computed(() => {
         <t-select v-model="form.sync_schedule">
           <t-option v-for="p in schedulePresets" :key="p.value" :value="p.value" :label="p.label" />
         </t-select>
+        <p v-if="isDokuWikiConnector(form.type)" class="form-desc">{{ t('datasource.dokuwiki.scheduleHint') }}</p>
       </section>
 
       <section class="setting-drawer__section">
@@ -2170,7 +2274,8 @@ const drawerConfirmText = computed(() => {
         </div>
 
         <div class="form-item form-item--flat">
-          <t-checkbox v-model="form.sync_deletions">{{ t('datasource.syncDeletions') }}</t-checkbox>
+          <t-checkbox v-model="form.sync_deletions" :disabled="isDokuWikiConnector(form.type)">{{ t('datasource.syncDeletions') }}</t-checkbox>
+          <p v-if="isDokuWikiConnector(form.type)" class="form-desc">{{ t('datasource.dokuwiki.deletionsHint') }}</p>
         </div>
       </section>
 

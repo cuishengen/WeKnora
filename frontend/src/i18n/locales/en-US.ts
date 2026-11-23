@@ -1052,6 +1052,7 @@ export default {
     channelYuque: 'Yuque',
     channelGitLab: 'GitLab',
     channelSeafile: 'Seafile',
+    channelDokuWiki: 'DokuWiki (NAS)',
     channelIma: 'Tencent IMA',
     channelUpload: 'Upload',
     channelManual: 'Manual',
@@ -8212,6 +8213,24 @@ export default {
     connectionFailed: 'Connection failed',
     isRequired: 'is required',
     credentialsLabel: 'credentials',
+    dokuwiki: {
+      settingsStep: "Source settings",
+      source: "Source",
+      sourceVendor: "Vendor Wiki (NAS)",
+      sourceHint: "Read the configured Wiki mirror directly. No Wiki account or password is required.",
+      sourceRequired: "Select an available Wiki source.",
+      formats: "Document formats",
+      pageFormat: "Wiki pages / TXT",
+      formatsHint: "Archives and images are not treated as parsed text.",
+      formatsRequired: "Select at least one supported document format.",
+      resourceHint: "Select the namespaces to sync. Select the root to include the entire source.",
+      resourceRequired: "Select at least one namespace.",
+      emptyHint: "No namespaces are available. Check the selected source or contact its maintainer, then reload.",
+      daily: "Daily at 01:00 (Asia/Shanghai)",
+      manual: "Manual only",
+      scheduleHint: "Automatic sync uses Beijing time. You can also choose Sync now at any time.",
+      deletionsHint: "Source deletion sync is not supported yet. Existing documents are retained.",
+    },
     gitlab: {
       baseUrl: 'GitLab URL', accessToken: 'Personal access token', projects: 'GitLab projects',
       projectsHint: 'Enter a project ID or namespace path (for example group/project), with optional branch and directories.',
@@ -8291,6 +8310,7 @@ export default {
       docsFailedSummary: '{n} document(s) failed to sync'
     },
     connector: {
+      dokuwiki_filesystem: 'DokuWiki (NAS)',
       feishu: 'Feishu',
       lark: 'Lark',
       feishu_drive: 'Feishu Drive',
@@ -8305,6 +8325,7 @@ export default {
       seafile: 'Seafile'
     },
     connectorDesc: {
+      dokuwiki_filesystem: "Sync pages and documents from the NAS Wiki mirror",
       feishu: 'Sync documents, spreadsheets and files from Feishu Wiki',
       lark: 'Sync documents, spreadsheets and files from Lark Wiki (Feishu international)',
       feishu_drive: 'Sync documents, spreadsheets and files from a Feishu Drive folder',

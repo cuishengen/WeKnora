@@ -1208,6 +1208,24 @@ export default {
     connectionFailed: '연결 실패',
     isRequired: '은(는) 필수입니다',
     credentialsLabel: '자격 증명',
+    dokuwiki: {
+      settingsStep: "Source settings",
+      source: "Source",
+      sourceVendor: "Vendor Wiki (NAS)",
+      sourceHint: "Read the configured Wiki mirror directly. No Wiki account or password is required.",
+      sourceRequired: "Select an available Wiki source.",
+      formats: "Document formats",
+      pageFormat: "Wiki pages / TXT",
+      formatsHint: "Archives and images are not treated as parsed text.",
+      formatsRequired: "Select at least one supported document format.",
+      resourceHint: "Select the namespaces to sync. Select the root to include the entire source.",
+      resourceRequired: "Select at least one namespace.",
+      emptyHint: "No namespaces are available. Check the selected source or contact its maintainer, then reload.",
+      daily: "Daily at 01:00 (Asia/Shanghai)",
+      manual: "Manual only",
+      scheduleHint: "Automatic sync uses Beijing time. You can also choose Sync now at any time.",
+      deletionsHint: "Source deletion sync is not supported yet. Existing documents are retained.",
+    },
     gitlab: {
       baseUrl: 'GitLab URL', accessToken: '개인 액세스 토큰', projects: 'GitLab 프로젝트',
       projectsHint: '프로젝트 ID 또는 네임스페이스 경로(예: group/project)를 입력하고, 필요에 따라 브랜치와 디렉터리를 지정하세요.',
@@ -1375,6 +1393,7 @@ export default {
       cloudFolderLimitation: 'Confluence Cloud는 아직 스페이스 최상위 폴더 등 컨테이너 아래의 페이지를 여기에 나열할 수 없습니다. 스페이스 전체를 선택하면 함께 동기화됩니다.'
     },
     connectorDesc: {
+      dokuwiki_filesystem: "Sync pages and documents from the NAS Wiki mirror",
       feishu: '페이슈 위키에서 문서, 스프레드시트, 파일 동기화',
       lark: 'Lark 위키에서 문서, 스프레드시트, 파일 동기화',
       feishu_drive: "페이슈 드라이브 폴더에서 문서, 스프레드시트, 파일 동기화",
@@ -1389,6 +1408,7 @@ export default {
       seafile: 'Seafile 라이브러리의 폴더와 파일 동기화'
     },
     connector: {
+      dokuwiki_filesystem: 'DokuWiki (NAS)',
       feishu: '페이슈 (Feishu)',
       lark: 'Lark (Feishu 글로벌)',
       feishu_drive: "페이슈 드라이브",
@@ -8521,6 +8541,7 @@ export default {
     channelYuque: 'Yuque',
     channelGitLab: 'GitLab',
     channelSeafile: 'Seafile',
+    channelDokuWiki: 'DokuWiki (NAS)',
     channelIma: 'Tencent IMA',
     channelUpload: '업로드',
     channelManual: '수동',

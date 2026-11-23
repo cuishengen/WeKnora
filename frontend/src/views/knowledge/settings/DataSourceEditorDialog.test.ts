@@ -49,6 +49,7 @@ async function fixture({
     },
     async validateConnection(id: string) {
       calls.push({ method: 'validateConnection', args: [id] })
+      if (type === 'dokuwiki_filesystem') return
       if (storedToken !== 'rotated-token') throw new Error('gitlab API /user: status 401')
     },
     async updateDataSource(id: string, data: any) {
@@ -115,6 +116,74 @@ async function fixture({
   }
   return { vm, calls, warnings, replace, storedToken: () => storedToken, close: () => app.unmount() }
 }
+
+test('DokuWiki uses a paused source for validation and supports manual sync without credentials', async () => {
+  const f = await fixture({ create: true, type: 'dokuwiki_filesystem', configured: false })
+  try {
+    f.vm.selectType(f.vm.connectorDefs.find((def: any) => def.type === 'dokuwiki_filesystem'))
+    assert.equal(f.vm.form.config.settings.source_alias, 'vendor-wiki')
+    assert.deepEqual(Array.from(f.vm.dokuwikiSelectedFileTypes), ['txt', 'pdf', 'xlsx', 'xls', 'docx'])
+    assert.equal(f.vm.form.sync_schedule, 'CRON_TZ=Asia/Shanghai 0 0 1 * * *')
+    assert.equal(f.vm.form.sync_deletions, false)
+    await f.vm.nextStep()
+    await flush()
+    assert.equal(f.vm.step, 2)
+    const create = f.calls.find(call => call.method === 'createDataSource')!
+    assert.equal(create.args[0].status, 'paused')
+    assert.deepEqual(create.args[0].config.credentials, {})
+    assert.ok(f.calls.some(call => call.method === 'validateConnection' && call.args[0] === 'source-temp'))
+    assert.ok(!f.calls.some(call => /Credentials/.test(call.method)))
+    f.vm.form.sync_schedule = ''
+    f.vm.form.sync_deletions = true
+    await f.vm.handleSubmit()
+    const saved = f.calls.filter(call => call.method === 'updateDataSource').at(-1)!.args[1]
+    assert.equal(saved.sync_schedule, '')
+    assert.equal(saved.sync_deletions, false)
+    assert.deepEqual(saved.config.resource_ids, ['namespace:'])
+  } finally { f.close() }
+})
+
+test('DokuWiki rejects unknown aliases, empty formats and an empty namespace selection', async () => {
+  const f = await fixture({ create: true, type: 'dokuwiki_filesystem', configured: false })
+  try {
+    f.vm.selectType(f.vm.connectorDefs.find((def: any) => def.type === 'dokuwiki_filesystem'))
+    f.vm.form.config.settings.source_alias = '/arbitrary/server/path'
+    await f.vm.nextStep()
+    assert.equal(f.vm.step, 1)
+    assert.equal(f.calls.length, 0)
+    f.vm.form.config.settings.source_alias = 'vendor-wiki'
+    f.vm.dokuwikiSelectedFileTypes = []
+    await f.vm.nextStep()
+    assert.equal(f.vm.step, 1)
+    assert.equal(f.calls.length, 0)
+    f.vm.dokuwikiSelectedFileTypes = ['txt']
+    f.vm.step = 2
+    f.vm.selectedResourceIds = []
+    await f.vm.nextStep()
+    assert.equal(f.vm.step, 2)
+    assert.ok(f.warnings.includes('datasource.dokuwiki.resourceRequired'))
+  } finally { f.close() }
+})
+
+test('editing DokuWiki preserves saved formats, namespaces and a manual schedule', async () => {
+  const f = await fixture({ configured: false, type: 'dokuwiki_filesystem', dataSource: {
+    id: 'source-one', name: 'Wiki', type: 'dokuwiki_filesystem',
+    config: { credentials: {}, resource_ids: ['namespace:release:earphone'], settings: {
+      source_alias: 'vendor-wiki', file_types: ['pdf'],
+    } },
+    sync_schedule: '', sync_mode: 'incremental', conflict_strategy: 'overwrite', sync_deletions: false,
+  } })
+  try {
+    assert.equal(f.vm.form.sync_schedule, '')
+    assert.deepEqual(Array.from(f.vm.dokuwikiSelectedFileTypes), ['pdf'])
+    await f.vm.testConnection()
+    assert.equal(f.vm.testResult, 'success')
+    const saved = f.calls.find(call => call.method === 'updateDataSource')!.args[1]
+    assert.deepEqual(saved.config.resource_ids, ['namespace:release:earphone'])
+    assert.deepEqual(saved.config.settings.file_types, ['pdf'])
+    assert.ok(!f.calls.some(call => /Credentials/.test(call.method)))
+  } finally { f.close() }
+})
 
 test('rotated GitLab credentials are tested without updating the saved data source', async () => {
   const f = await fixture()
