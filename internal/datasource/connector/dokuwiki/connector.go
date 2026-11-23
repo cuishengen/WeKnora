@@ -43,6 +43,9 @@ func (c *Connector) Validate(ctx context.Context, ds *types.DataSourceConfig) er
 	if err != nil {
 		return err
 	}
+	if err := cfg.authorize(ctx); err != nil {
+		return err
+	}
 	s, err := openSource(cfg.source)
 	if err != nil {
 		return err
@@ -60,6 +63,9 @@ func (c *Connector) VerifyFetchedItem(ctx context.Context, ds *types.DataSourceC
 	}
 	cfg, err := c.parseConfig(ds)
 	if err != nil {
+		return err
+	}
+	if err := cfg.authorize(ctx); err != nil {
 		return err
 	}
 	if item == nil || item.Metadata["source_alias"] != cfg.alias || !validDigest(item.Metadata["sha256"]) {
@@ -113,6 +119,9 @@ func (c *Connector) VerifyFetchedItem(ctx context.Context, ds *types.DataSourceC
 func (c *Connector) ListResources(ctx context.Context, ds *types.DataSourceConfig, parentID string) ([]types.Resource, error) {
 	cfg, err := c.parseConfig(ds)
 	if err != nil {
+		return nil, err
+	}
+	if err := cfg.authorize(ctx); err != nil {
 		return nil, err
 	}
 	s, err := openSource(cfg.source)
@@ -251,13 +260,20 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 	if err != nil {
 		return nil, err
 	}
+	if err := cfg.authorize(ctx); err != nil {
+		return nil, err
+	}
 	if len(cfg.namespaces) == 0 || h == nil {
 		return nil, fmt.Errorf("%w: select at least one DokuWiki namespace", datasource.ErrInvalidConfig)
 	}
+	// Tenant ownership is enforced on every access. Adding a tenant allowlist
+	// does not invalidate already-acknowledged bytes in an authorized workspace.
+	bindingSource := cfg.source
+	bindingSource.AllowedTenantIDs = nil
 	bindingData, _ := json.Marshal(struct {
 		Alias  string
 		Source Source
-	}{cfg.alias, cfg.source})
+	}{cfg.alias, bindingSource})
 	state := &syncState{Version: 1, Binding: digest(bindingData), Files: make(map[string]string)}
 	var lastComplete time.Time
 	if old != nil && len(old.ConnectorCursor) > 0 {

@@ -53,6 +53,9 @@ func (c *Connector) OpenReference(ctx context.Context, ref *types.SourceFileRefe
 	if err != nil {
 		return nil, "", err
 	}
+	if err := cfg.authorize(ctx); err != nil {
+		return nil, "", err
+	}
 	ns := strings.ReplaceAll(path.Dir(strings.TrimPrefix(ref.RelativePath, "media/")), "/", ":")
 	if ns == "." {
 		ns = ""

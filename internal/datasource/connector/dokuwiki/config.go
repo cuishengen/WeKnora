@@ -3,6 +3,7 @@
 package dokuwiki
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ const SourcesEnv = "WEKNORA_DOKUWIKI_SOURCES"
 // Source defines a trusted, read-only mount. Namespace policies constrain all
 // selections; they are not a replacement for the target knowledge base ACL.
 type Source struct {
+	AllowedTenantIDs  []uint64 `json:"allowed_tenant_ids,omitempty"`
 	DataRoot          string   `json:"data_root"`
 	PublicBaseURL     string   `json:"public_base_url"`
 	Sentinel          string   `json:"sentinel"`
@@ -64,8 +66,28 @@ func NewConnectorFromEnv() (*Connector, error) {
 		if err := dec.Decode(new(interface{})); err != io.EOF {
 			return nil, fmt.Errorf("%w: trailing data in %s", datasource.ErrInvalidConfig, SourcesEnv)
 		}
+		for _, source := range sources {
+			if len(source.AllowedTenantIDs) == 0 {
+				return nil, fmt.Errorf("%w: filesystem sources require an explicit workspace allowlist", datasource.ErrInvalidConfig)
+			}
+		}
 	}
 	return NewConnector(sources)
+}
+
+func (cfg *selection) authorize(ctx context.Context) error {
+	// Directly constructed test connectors may be unscoped. Environment-backed
+	// product sources always have an explicit allowlist, checked above.
+	if len(cfg.source.AllowedTenantIDs) == 0 {
+		return nil
+	}
+	tenant, _ := ctx.Value(types.TenantIDContextKey).(uint64)
+	for _, allowed := range cfg.source.AllowedTenantIDs {
+		if allowed != 0 && allowed == tenant {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: this workspace is not authorized for the filesystem source", datasource.ErrInvalidConfig)
 }
 
 // NewConnector validates and copies trusted deployment configuration.
@@ -92,6 +114,7 @@ func NewConnector(sources map[string]Source) (*Connector, error) {
 			return nil, fmt.Errorf("%w: DokuWiki ACL guard requires an absolute path and SHA-256", datasource.ErrInvalidConfig)
 		}
 		src.DataRoot = filepath.Clean(src.DataRoot)
+		src.AllowedTenantIDs = append([]uint64{}, src.AllowedTenantIDs...)
 		src.PublicBaseURL = strings.TrimRight(src.PublicBaseURL, "/")
 		src.AllowedNamespaces = append([]string{}, src.AllowedNamespaces...)
 		src.DeniedNamespaces = append([]string{}, src.DeniedNamespaces...)
