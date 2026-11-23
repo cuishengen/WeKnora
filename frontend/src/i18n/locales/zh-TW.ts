@@ -1218,7 +1218,7 @@ export default {
       pageFormat: "Wiki 正文 / TXT",
       formatsHint: "圖片辨識需在本庫啟用圖片理解模型。壓縮檔等附件僅建立原件目錄並提供下載，不解壓內容。",
       attachmentFormat: "壓縮檔及其他附件（僅下載）",
-      inventory: "來源檔案 {total} · 已同步 {completed} · 圖片 {images} · 附件 {attachments} · 失敗 {failed}",
+      inventory: "來源檔案 {total} · 已同步 {completed} · 圖片 {imageDone}/{images} · 附件 {attachmentDone}/{attachments} · 失敗 {failed}",
       formatsRequired: "請至少選擇一種支援的文件格式。",
       resourceHint: "選擇要同步的命名空間；勾選根目錄可同步整個來源。",
       resourceRequired: "請至少選擇一個命名空間。",

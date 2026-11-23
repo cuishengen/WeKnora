@@ -29,6 +29,20 @@ const authStore = useAuthStore()
 const canManageDataSource = computed(() => authStore.hasRole('admin'))
 
 const dataSources = ref<DataSource[]>([])
+
+const sourceProgress = (source: DataSource) => {
+  const cursor = source.last_sync_cursor?.connector_cursor
+  const files = Object.keys(cursor?.files || {})
+  const image = /\.(png|jpe?g|gif|bmp|tiff|webp)$/i
+  const document = /\.(txt|pdf|xlsx?|docx)$/i
+  return {
+    total: cursor?.inventory?.source_files || 0, completed: files.length,
+    images: cursor?.inventory?.images || 0, imageDone: files.filter(path => image.test(path)).length,
+    attachments: cursor?.inventory?.attachments || 0,
+    attachmentDone: files.filter(path => !image.test(path) && !document.test(path)).length,
+    failed: Object.keys(cursor?.failed || {}).length,
+  }
+}
 const loading = ref(false)
 const editorVisible = ref(false)
 const editingDs = ref<DataSource | null>(null)
@@ -310,13 +324,7 @@ onBeforeUnmount(stopPolling)
               </template>
             </p>
             <p v-if="ds.last_sync_cursor?.connector_cursor?.inventory" class="ds-card__detail">
-              {{ t('datasource.dokuwiki.inventory', {
-                total: ds.last_sync_cursor.connector_cursor.inventory.source_files,
-                completed: Object.keys(ds.last_sync_cursor.connector_cursor.files || {}).length,
-                images: ds.last_sync_cursor.connector_cursor.inventory.images,
-                attachments: ds.last_sync_cursor.connector_cursor.inventory.attachments,
-                failed: Object.keys(ds.last_sync_cursor.connector_cursor.failed || {}).length
-              }) }}
+              {{ t('datasource.dokuwiki.inventory', sourceProgress(ds)) }}
             </p>
             <div v-if="ds.error_message" class="ds-card__error">
               <t-icon name="error-circle-filled" size="14px" />

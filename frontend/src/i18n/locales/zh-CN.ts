@@ -1218,7 +1218,7 @@ export default {
       pageFormat: "Wiki 正文 / TXT",
       formatsHint: "图片识别需要在本库启用图片理解模型。压缩包等附件仅建立原件目录并提供下载，不解压包内内容。",
       attachmentFormat: "压缩包及其他附件（仅下载）",
-      inventory: "源文件 {total} · 已同步 {completed} · 图片 {images} · 附件 {attachments} · 失败 {failed}",
+      inventory: "源文件 {total} · 已同步 {completed} · 图片 {imageDone}/{images} · 附件 {attachmentDone}/{attachments} · 失败 {failed}",
       formatsRequired: "请至少选择一种支持的文档格式。",
       resourceHint: "选择要同步的命名空间；勾选根目录可同步整个来源。",
       resourceRequired: "请至少选择一个命名空间。",

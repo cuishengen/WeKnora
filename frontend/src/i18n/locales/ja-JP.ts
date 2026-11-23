@@ -8223,7 +8223,7 @@ export default {
       pageFormat: "Wiki pages / TXT",
       formatsHint: "Images require an image understanding model for this library. Archives and other attachments are catalogued for original-file download; their internal contents are not parsed.",
       attachmentFormat: "Archives and other attachments (download only)",
-      inventory: "Sources {total} · Synced {completed} · Images {images} · Attachments {attachments} · Failed {failed}",
+      inventory: "Sources {total} · Synced {completed} · Images {imageDone}/{images} · Attachments {attachmentDone}/{attachments} · Failed {failed}",
       formatsRequired: "Select at least one supported document format.",
       resourceHint: "Select the namespaces to sync. Select the root to include the entire source.",
       resourceRequired: "Select at least one namespace.",
