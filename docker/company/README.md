@@ -11,6 +11,11 @@ never enter a server path or Wiki password. See
 for the JSON allowlist and namespace policy. Mount only the Wiki data directory
 read-only, plus the reviewed ACL file separately when using its fingerprint
 guard. It does not grant members the source Wiki's permissions automatically.
+Each alias also requires an explicit workspace allowlist. Enable the knowledge
+base's image understanding model before expecting searchable image content.
+Archives use protected original-file references and metadata catalogs; their
+contents are not extracted. Direct uploads retain the application size limit,
+while source references can serve larger originals from the approved mount.
 
 The first sync should run manually. Inspect parsed, failed and excluded items
 before enabling `CRON_TZ=Asia/Shanghai 0 0 1 * * *`. Pausing automatic sync still
@@ -52,10 +57,25 @@ the clone's automatic sources and external message channels disabled. Check
 new/unchanged/replaced/rejected documents, logical source identity, raw-byte
 hashes, authenticated citations and unpublished-resource denial.
 
-The added migrations are PostgreSQL 135 and SQLite 52. A document becomes
+The added migrations are PostgreSQL 135/136 and SQLite 52/53, covering staged
+publication and trusted original-file references. A document becomes
 visible only after its mandatory indexes are ready and source verification
 succeeds. Cleanup follows publication; a failed version leaves the predecessor
 usable. Historical versions are not archived by this change.
+
+Validate actual keyword scopes and positive BM25 scores as well as vector hits.
+The generated-question exclusion uses an equivalent `starts_with` prefix test
+on PostgreSQL to avoid a column-comparison score-plan problem in pg_search
+0.25.11. The real-database regression fixture checks document/KB/tag boundaries,
+disabled and unpublished rows, generated questions and TopK after exclusion:
+
+```sh
+WEKNORA_RETRIEVER_BM25_TEST_DSN='postgres://user:password@candidate/database?sslmode=disable' \
+  go test ./internal/application/repository/retriever/postgres -run TestKeywordExclusionPreservesScopeAndRanking -count=1
+```
+
+Use a disposable database with pg_search installed. The test creates an
+isolated synthetic schema inside a transaction and rolls it back.
 
 Before rolling back to an application without the publication barrier, pause
 sources, stop their jobs and resolve unpublished candidates using the new
