@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"path"
 	"strings"
 	"time"
 
@@ -39,9 +40,54 @@ type DataSourceResponse struct {
 	UpdatedAt            time.Time            `json:"updated_at"`
 	TotalItemsSynced     int64                `json:"total_items_synced" extensions:"x-agent"`
 	LatestSyncLog        *types.SyncLog       `json:"latest_sync_log,omitempty"`
+	SourceProgress       *DataSourceProgress  `json:"source_progress,omitempty"`
 	// Single logical credential field — DataSource credentials are a
 	// per-connector atomic map, so "configured?" applies to the whole set.
 	Credentials map[string]CredentialFieldMetadata `json:"credentials,omitempty"`
+}
+
+// DataSourceProgress keeps list polling small while exposing durable scan counts.
+type DataSourceProgress struct {
+	Total          int `json:"total"`
+	Completed      int `json:"completed"`
+	Images         int `json:"images"`
+	ImageDone      int `json:"image_done"`
+	Attachments    int `json:"attachments"`
+	AttachmentDone int `json:"attachment_done"`
+	Failed         int `json:"failed"`
+}
+
+func sourceProgress(ds *types.DataSource) *DataSourceProgress {
+	if ds.Type != types.ConnectorTypeDokuWikiFilesystem {
+		return nil
+	}
+	var cursor struct {
+		Connector struct {
+			Inventory *struct {
+				Total       int `json:"source_files"`
+				Images      int `json:"images"`
+				Attachments int `json:"attachments"`
+			} `json:"inventory"`
+			Files  map[string]json.RawMessage `json:"files"`
+			Failed map[string]json.RawMessage `json:"failed"`
+		} `json:"connector_cursor"`
+	}
+	if json.Unmarshal(ds.LastSyncCursor, &cursor) != nil || cursor.Connector.Inventory == nil {
+		return nil
+	}
+	c := cursor.Connector
+	progress := &DataSourceProgress{Total: c.Inventory.Total, Images: c.Inventory.Images,
+		Attachments: c.Inventory.Attachments, Completed: len(c.Files), Failed: len(c.Failed)}
+	for filename := range c.Files {
+		switch strings.ToLower(path.Ext(filename)) {
+		case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp":
+			progress.ImageDone++
+		case ".txt", ".pdf", ".xlsx", ".xls", ".docx":
+		default:
+			progress.AttachmentDone++
+		}
+	}
+	return progress
 }
 
 // DataSourceConfigDTO is types.DataSourceConfig with the Credentials map
@@ -90,6 +136,7 @@ func NewDataSourceResponse(ds *types.DataSource) *DataSourceResponse {
 		UpdatedAt:            ds.UpdatedAt,
 		TotalItemsSynced:     ds.TotalItemsSynced,
 		LatestSyncLog:        ds.LatestSyncLog,
+		SourceProgress:       sourceProgress(ds),
 		Credentials: map[string]CredentialFieldMetadata{
 			"credentials": {Configured: configured},
 		},

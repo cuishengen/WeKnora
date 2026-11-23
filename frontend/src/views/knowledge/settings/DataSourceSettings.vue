@@ -31,16 +31,12 @@ const canManageDataSource = computed(() => authStore.hasRole('admin'))
 const dataSources = ref<DataSource[]>([])
 
 const sourceProgress = (source: DataSource) => {
-  const cursor = source.last_sync_cursor?.connector_cursor
-  const files = Object.keys(cursor?.files || {})
-  const image = /\.(png|jpe?g|gif|bmp|tiff|webp)$/i
-  const document = /\.(txt|pdf|xlsx?|docx)$/i
+  const progress = source.source_progress
   return {
-    total: cursor?.inventory?.source_files || 0, completed: files.length,
-    images: cursor?.inventory?.images || 0, imageDone: files.filter(path => image.test(path)).length,
-    attachments: cursor?.inventory?.attachments || 0,
-    attachmentDone: files.filter(path => !image.test(path) && !document.test(path)).length,
-    failed: Object.keys(cursor?.failed || {}).length,
+    total: progress?.total || 0, completed: progress?.completed || 0,
+    images: progress?.images || 0, imageDone: progress?.image_done || 0,
+    attachments: progress?.attachments || 0, attachmentDone: progress?.attachment_done || 0,
+    failed: progress?.failed || 0,
   }
 }
 const loading = ref(false)
@@ -323,7 +319,7 @@ onBeforeUnmount(stopPolling)
                 >{{ pill.text }}</span>
               </template>
             </p>
-            <p v-if="ds.last_sync_cursor?.connector_cursor?.inventory" class="ds-card__detail">
+            <p v-if="ds.source_progress" class="ds-card__detail">
               {{ t('datasource.dokuwiki.inventory', sourceProgress(ds)) }}
             </p>
             <div v-if="ds.error_message" class="ds-card__error">

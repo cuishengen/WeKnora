@@ -80,6 +80,18 @@ func TestDataSourceResponse_NilSafe(t *testing.T) {
 	assert.Equal(t, []*DataSourceResponse{}, NewDataSourceResponses(nil))
 }
 
+func TestNASListKeepsProgressWithoutFileCursor(t *testing.T) {
+	ds := &types.DataSource{Type: types.ConnectorTypeDokuWikiFilesystem,
+		LastSyncCursor: types.JSON(`{"connector_cursor":{"inventory":{"source_files":8,"images":3,"attachments":2},"files":{"pages/a.txt":"hash","media/a.PNG":"hash","media/b.zip":"hash"},"failed":{"media/b.pdf":"reason"}}}`)}
+	list := NewDataSourceResponses([]*types.DataSource{ds})
+	assert.Empty(t, list[0].LastSyncCursor)
+	assert.Equal(t, &DataSourceProgress{Total: 8, Completed: 3, Images: 3, ImageDone: 1, Attachments: 2, AttachmentDone: 1, Failed: 1}, list[0].SourceProgress)
+	body, err := json.Marshal(list)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(body), "media/a.PNG")
+	assert.Contains(t, string(body), `"source_progress"`)
+}
+
 func TestDataSourceResponse_RSSFeedURLsFromCredentials(t *testing.T) {
 	cfg := types.DataSourceConfig{
 		Type: types.ConnectorTypeRSS,

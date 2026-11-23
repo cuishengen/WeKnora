@@ -17,6 +17,7 @@ export interface DataSource {
   last_sync_at: string | null
   last_sync_result: any
   last_sync_cursor?: { connector_cursor?: { inventory?: Record<string, number>, files?: Record<string, string>, failed?: Record<string, string> } }
+  source_progress?: { total: number, completed: number, images: number, image_done: number, attachments: number, attachment_done: number, failed: number }
   error_message: string
   // Single-field "credentials" map from the main response — DataSource
   // credentials are a per-connector atomic set.
