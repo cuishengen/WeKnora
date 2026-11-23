@@ -13,6 +13,7 @@ import (
 // this set by docparser's contract test to prevent advertised-but-rejected
 // formats (#4598).
 var supportedImportFileExtensions = map[string]struct{}{
+	"zip": {}, "rar": {}, "7z": {}, "tar": {}, "gz": {}, "tgz": {}, "bz2": {}, "xz": {}, "bin": {}, "hex": {},
 	"pdf": {}, "txt": {}, "docx": {}, "doc": {}, "epub": {},
 	"docm": {}, "odt": {}, "rtf": {},
 	"html": {}, "htm": {}, "mhtml": {}, "md": {}, "markdown": {},
@@ -22,6 +23,21 @@ var supportedImportFileExtensions = map[string]struct{}{
 	"csv": {}, "xlsx": {}, "xls": {}, "pptx": {}, "ppt": {}, "json": {},
 	"xlsm": {}, "ods": {}, "pptm": {}, "odp": {},
 	"mp3": {}, "wav": {}, "m4a": {}, "flac": {}, "ogg": {},
+}
+
+// AttachmentExtensions are stored and indexed by filename; their contents are
+// not parsed or executed. Normal upload size and authorization limits apply.
+func AttachmentExtensions() []string {
+	return []string{"zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "bin", "hex"}
+}
+
+func IsAttachmentExtension(extension string) bool {
+	for _, item := range AttachmentExtensions() {
+		if NormalizeImportExtension(extension) == item {
+			return true
+		}
+	}
+	return false
 }
 
 // NormalizeImportExtension lowercases an extension and strips surrounding

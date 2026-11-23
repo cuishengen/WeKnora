@@ -4149,6 +4149,9 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		}
 	}
 	sanitizeReadResult(convertResult)
+	if convertResult != nil && (knowledge.SourceReference != nil || secutils.IsAttachmentExtension(knowledge.FileType)) {
+		convertResult.MarkdownContent += fmt.Sprintf("\n原件下载链接：/platform/source-download/%s\n", knowledge.ID)
+	}
 	normalizeStarted := time.Now()
 	if convertResult != nil {
 		convertResult.MarkdownContent = chunker.NormalizeLineEndings(convertResult.MarkdownContent)

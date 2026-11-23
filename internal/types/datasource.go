@@ -309,6 +309,7 @@ type Resource struct {
 
 // FetchedItem represents a single document/content item fetched from external source
 type FetchedItem struct {
+	SourceReference *SourceFileReference `json:"-"`
 	// Unique ID in the external system
 	ExternalID string `json:"external_id"`
 
@@ -377,6 +378,14 @@ type FetchedItem struct {
 	// nil and empty are equivalent here; the omitempty tag is for API/debug
 	// exposure only and must not be relied on to distinguish "unset" from "empty".
 	SubtreeKeep []string `json:"subtree_keep,omitempty"`
+}
+
+// SourceFileReference describes a download-only original, never archive contents.
+type SourceFileReference struct {
+	Alias        string `json:"alias"`
+	RelativePath string `json:"relative_path"`
+	SHA256       string `json:"sha256"`
+	Size         int64  `json:"size"`
 }
 
 // SubtreeChildID builds the external_id of a sub-item fanned out from a parent

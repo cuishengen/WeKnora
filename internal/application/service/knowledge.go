@@ -15,6 +15,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
 	"github.com/Tencent/WeKnora/internal/config"
+	"github.com/Tencent/WeKnora/internal/datasource/connector/dokuwiki"
 	werrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -820,6 +821,13 @@ func (s *knowledgeService) GetKnowledgeFile(ctx context.Context, id string) (io.
 	}
 	if knowledge == nil || knowledge.IsStaged {
 		return nil, "", repository.ErrKnowledgeNotFound
+	}
+	if knowledge.SourceReference != nil {
+		connector, err := dokuwiki.NewConnectorFromEnv()
+		if err != nil {
+			return nil, "", err
+		}
+		return connector.OpenReference(ctx, knowledge.SourceReference)
 	}
 
 	// Manual knowledge stores content in Metadata — stream it directly as a .md file.

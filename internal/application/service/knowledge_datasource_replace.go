@@ -17,6 +17,7 @@ type knowledgeReplacement struct {
 	committed bool
 	keepFile  bool // a failed commit/read may still have published the new path
 	staged    bool // datasource candidate: preserve the predecessor until indexed
+	reference *types.SourceFileReference
 }
 
 func (s *knowledgeService) checkKnowledgeForCreation(ctx context.Context, tenantID uint64, kbID string,
@@ -36,6 +37,10 @@ func (s *knowledgeService) persistKnowledgeForCreation(ctx context.Context, know
 	}
 	if replacement.staged {
 		knowledge.IsStaged = true
+		knowledge.SourceReference = replacement.reference
+		if replacement.reference != nil {
+			knowledge.Title = replacement.metadata["original_name"]
+		}
 		if replacement.previous != nil {
 			id := replacement.previous.ID
 			knowledge.ReplacesKnowledgeID = &id

@@ -87,10 +87,17 @@ func (c *Connector) VerifyFetchedItem(ctx context.Context, ds *types.DataSourceC
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Size() > utils.GetMaxFileSize() {
+	if !info.Mode().IsRegular() || (item.SourceReference == nil && info.Size() > utils.GetMaxFileSize()) {
 		return datasource.ErrFetchFailed
 	}
 	e := entry{rel: rel, namespace: ns, info: info}
+	if item.SourceReference != nil {
+		hash, err := s.hashFile(ctx, e)
+		if err != nil || hash != item.Metadata["sha256"] || referenceItem(cfg, e, hash).ExternalID != item.ExternalID {
+			return datasource.ErrFetchFailed
+		}
+		return s.healthy()
+	}
 	content, err := s.read(e, utils.GetMaxFileSize())
 	if err != nil {
 		return err
@@ -209,6 +216,7 @@ func (c *Connector) FetchFullStream(ctx context.Context, ds *types.DataSourceCon
 }
 
 type syncState struct {
+	Inventory      map[string]int    `json:"inventory,omitempty"`
 	Version        int               `json:"version"`
 	Binding        string            `json:"binding"`
 	Files          map[string]string `json:"files"`
@@ -281,7 +289,48 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 		state.Excluded[rel] = reason
 		state.ExcludedCounts[reason]++
 	}
+	state.Inventory = map[string]int{"source_files": 0, "documents": 0, "images": 0, "attachments": 0}
 	for _, e := range entries {
+		if !cfg.selected(e.namespace) {
+			continue
+		}
+		state.Inventory["source_files"]++
+		ext := strings.TrimPrefix(strings.ToLower(path.Ext(e.rel)), ".")
+		if imageFile(ext) {
+			state.Inventory["images"]++
+		} else if _, ok := contentTypes[ext]; ok {
+			state.Inventory["documents"]++
+		} else {
+			state.Inventory["attachments"]++
+		}
+	}
+	initial, err := state.cursor(lastComplete)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.Checkpoint(ctx, initial); err != nil {
+		return nil, err
+	}
+	processing := append([]entry(nil), entries...)
+	priority := func(e entry) int {
+		name := strings.ToLower(path.Base(e.rel))
+		ext := strings.TrimPrefix(strings.ToLower(path.Ext(e.rel)), ".")
+		if ext == "pdf" && (strings.Contains(name, "datasheet") || strings.Contains(name, "数据手册") || strings.Contains(name, "规格")) {
+			return 0
+		}
+		if _, ok := contentTypes[ext]; !ok && strings.HasPrefix(e.rel, "media/") {
+			return 1
+		}
+		if ext == "pdf" {
+			return 2
+		}
+		if imageFile(ext) {
+			return 4
+		}
+		return 3
+	}
+	sort.SliceStable(processing, func(i, j int) bool { return priority(processing[i]) < priority(processing[j]) })
+	for _, e := range processing {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -293,21 +342,29 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 			continue
 		}
 		ext := strings.TrimPrefix(strings.ToLower(path.Ext(e.rel)), ".")
-		if _, supported := contentTypes[ext]; !supported || (strings.HasPrefix(e.rel, "pages/") && ext != "txt") {
+		_, supported := contentTypes[ext]
+		reference := !supported && strings.HasPrefix(e.rel, "media/") && cfg.fileTypes["attachments"]
+		if (!supported && !reference) || (strings.HasPrefix(e.rel, "pages/") && ext != "txt") {
 			exclude(e.rel, "unsupported_format_not_parsed")
 			continue
 		}
-		if !cfg.fileTypes[ext] {
+		if !reference && !cfg.fileTypes[ext] {
 			exclude(e.rel, "file_type_not_selected")
 			continue
 		}
-		if e.info.Size() > utils.GetMaxFileSize() {
+		if !reference && e.info.Size() > utils.GetMaxFileSize() {
 			return nil, fmt.Errorf("%w: DokuWiki file exceeds import size limit: %s", datasource.ErrFetchFailed, e.rel)
 		}
 		if err := s.healthy(); err != nil {
 			return nil, err
 		}
-		content, err := s.read(e, utils.GetMaxFileSize())
+		var content []byte
+		var hash string
+		if reference {
+			hash, err = s.hashFile(ctx, e)
+		} else {
+			content, err = s.read(e, utils.GetMaxFileSize())
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -315,16 +372,18 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 			if !utf8.Valid(content) || strings.IndexByte(string(content), 0) >= 0 {
 				return nil, fmt.Errorf("%w: DokuWiki page is not lossless UTF-8: %s", datasource.ErrFetchFailed, e.rel)
 			}
-			if reason := navigationReason(string(content)); reason != "" {
+			if reason := navigationReason(string(content)); reason != "" && (reason == "empty_page_not_parsed" || !cfg.fileTypes["attachments"]) {
 				exclude(e.rel, reason)
 				continue
 			}
 		}
-		if len(content) == 0 {
+		if !reference && len(content) == 0 {
 			exclude(e.rel, "empty_source_not_parsed")
 			continue
 		}
-		hash := digest(content)
+		if !reference {
+			hash = digest(content)
+		}
 		if !full && state.Files[e.rel] == hash {
 			delete(state.Failed, e.rel)
 			continue
@@ -333,6 +392,9 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 			return nil, err
 		}
 		item := fetchedItem(cfg, e, content, hash)
+		if reference {
+			item = referenceItem(cfg, e, hash)
+		}
 		if err := h.Emit(ctx, item); err != nil {
 			var rejected *datasource.DocumentParseFailure
 			if !errors.As(err, &rejected) {

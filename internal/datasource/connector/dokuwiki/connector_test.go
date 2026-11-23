@@ -53,6 +53,7 @@ func fixture(t *testing.T) (*Connector, *types.DataSourceConfig, string) {
 		t.Fatal(err)
 	}
 	cfg := &types.DataSourceConfig{Type: types.ConnectorTypeDokuWikiFilesystem, Settings: map[string]interface{}{"source_alias": "vendor-wiki"}, ResourceIDs: []string{"namespace:"}}
+	cfg.Settings["file_types"] = []string{"txt", "pdf", "xlsx", "xls", "docx"}
 	return c, cfg, root
 }
 
@@ -98,11 +99,21 @@ func TestOriginalBytesIncrementalAndExclusionManifest(t *testing.T) {
 		t.Fatalf("unchanged source reemitted: %d %v", len(unchanged), err)
 	}
 	put(t, root, "pages/release/chips/spec.txt", []byte("Changed specification, RAM now explicitly documented."))
-	if err := c.VerifyFetchedItem(ctx, cfg, &items[0]); err == nil {
-		t.Fatal("changed original passed publication guard")
+	for _, item := range items {
+		if item.Metadata["relative_path"] == "pages/release/chips/spec.txt" {
+			if err := c.VerifyFetchedItem(ctx, cfg, &item); err == nil {
+				t.Fatal("changed original passed publication guard")
+			}
+		}
 	}
 	changed, _, err := c.FetchIncremental(ctx, cfg, cursor)
-	if err != nil || len(changed) != 1 || changed[0].ExternalID != items[0].ExternalID {
+	var previousID string
+	for _, item := range items {
+		if item.Metadata["relative_path"] == "pages/release/chips/spec.txt" {
+			previousID = item.ExternalID
+		}
+	}
+	if err != nil || len(changed) != 1 || changed[0].ExternalID != previousID {
 		t.Fatalf("stable identity/update mismatch: %d %v", len(changed), err)
 	}
 	if err := os.Remove(filepath.Join(root, "media/release/chips/manual.pdf")); err != nil {
@@ -123,10 +134,14 @@ func TestCheckpointOnlyAcknowledgesSuccessfulEmit(t *testing.T) {
 	c, cfg, _ := fixture(t)
 	h := &recordingHandler{failAt: 2}
 	_, err := c.FetchStream(context.Background(), cfg, nil, h)
-	if err == nil || len(h.items) != 1 || len(h.checkpoints) != 1 {
+	if err == nil || len(h.items) != 1 || len(h.checkpoints) != 2 {
 		t.Fatalf("failure not propagated: %v", err)
 	}
-	checkpoint := h.checkpoints[0]
+	// The first checkpoint records the full inventory before any publication.
+	if len(h.checkpoints[0].ConnectorCursor["files"].(map[string]interface{})) != 0 {
+		t.Fatal("inventory checkpoint claimed a published file")
+	}
+	checkpoint := h.checkpoints[1]
 	if len(checkpoint.ConnectorCursor["files"].(map[string]interface{})) != 1 || checkpoint.ConnectorCursor["scan_complete"] != false {
 		t.Fatal("checkpoint acknowledged failed/unscanned content")
 	}

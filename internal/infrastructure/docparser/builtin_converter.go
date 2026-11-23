@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/utils"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/encoding/unicode"
@@ -34,6 +35,9 @@ var audioFormats = map[string]bool{
 }
 
 func init() {
+	for _, ext := range utils.AttachmentExtensions() {
+		simpleFormats[ext] = true
+	}
 	for k := range imageFormats {
 		simpleFormats[k] = true
 	}
@@ -59,6 +63,8 @@ func (b *SimpleFormatReader) Read(ctx context.Context, req *types.ReadRequest) (
 	}
 
 	switch {
+	case utils.IsAttachmentExtension(ft):
+		return &types.ReadResult{MarkdownContent: fmt.Sprintf("原件附件：%s\n原始大小：%d 字节\n此条目仅供查找和下载原件，未解压或解析附件内部内容。", req.FileName, len(req.FileContent))}, nil
 	case ft == "md" || ft == "markdown":
 		return &types.ReadResult{MarkdownContent: string(decodeText(req.FileContent))}, nil
 	case ft == "txt" || ft == "text":

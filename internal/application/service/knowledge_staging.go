@@ -72,8 +72,12 @@ func (s *knowledgeService) StageDataSourceKnowledge(ctx context.Context, ds *typ
 		if buildErr != nil {
 			return false, buildErr
 		}
-		candidate, err = s.createKnowledgeFromFile(ctx, kb.ID, file, metadata, nil, item.FileName, tagIDs, channel, nil,
-			&knowledgeReplacement{previous: before, staged: true})
+		// Imported originals already contain their own context. Avoid one LLM
+		// summary call per file during a full scan; text/image indexing is unchanged.
+		summary := false
+		candidate, err = s.createKnowledgeFromFile(ctx, kb.ID, file, metadata, nil, item.FileName, tagIDs, channel,
+			&types.KnowledgeProcessOverrides{SummaryEnabled: &summary},
+			&knowledgeReplacement{previous: before, staged: true, metadata: metadata, reference: item.SourceReference})
 		if err != nil {
 			return false, err
 		}

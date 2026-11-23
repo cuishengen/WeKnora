@@ -223,6 +223,9 @@ type Knowledge struct {
 	FileHash string `json:"file_hash"`
 	// File path of the knowledge
 	FilePath string `json:"file_path"`
+	// SourceReference indexes an attachment kept in an administrator-mounted source.
+	// Only the trusted datasource creation path sets it; upload metadata cannot.
+	SourceReference *SourceFileReference `json:"source_reference,omitempty" gorm:"serializer:json;type:json"`
 	// Storage size of the knowledge
 	StorageSize int64 `json:"storage_size"`
 	// Metadata of the knowledge

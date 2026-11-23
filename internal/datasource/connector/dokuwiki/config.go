@@ -46,6 +46,9 @@ var contentTypes = map[string]string{
 	"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 	"xls":  "application/vnd.ms-excel",
 	"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	"png":  "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
+	"bmp": "image/bmp", "tiff": "image/tiff", "webp": "image/webp",
+	"attachments": "application/octet-stream",
 }
 
 // NewConnectorFromEnv loads the server allowlist once at startup. An empty

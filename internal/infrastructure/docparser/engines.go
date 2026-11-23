@@ -7,6 +7,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser/anydoc"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/utils"
 )
 
 // Engine names, as stored in knowledge base parser rules and shown in the UI.
@@ -111,11 +112,11 @@ func (e *simpleEngine) Description() string {
 }
 
 func (e *simpleEngine) FileTypes(_ bool) []string {
-	return []string{
+	return append([]string{
 		"md", "markdown", "txt", "csv", "json",
 		"jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp",
 		"mp3", "wav", "m4a", "flac", "ogg",
-	}
+	}, utils.AttachmentExtensions()...)
 }
 
 func (e *simpleEngine) CheckAvailable(_ bool, _ map[string]string) (bool, string) {

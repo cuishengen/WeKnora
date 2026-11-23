@@ -1274,6 +1274,22 @@ func (s *DataSourceService) processSyncStreaming(
 	}
 	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenant)
 
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		// A durable retry is an active attempt, including after startup marked
+		// an interrupted attempt failed. Do not leave the UI/scheduler stale.
+		syncLog.Status, syncLog.FinishedAt, syncLog.ErrorMessage = types.SyncLogStatusRunning, nil, ""
+		syncLog.Result = nil
+		if err := s.syncLogRepo.UpdateResult(ctx, syncLog); err != nil {
+			return err
+		}
+		if !wasPaused {
+			ds.Status = types.DataSourceStatusActive
+		}
+		ds.ErrorMessage = ""
+		if err := s.dsRepo.UpdateSyncState(ctx, ds); err != nil {
+			return err
+		}
+	}
 	autoTagIDs := s.resolveAutoTagIDs(ctx, ds)
 
 	forceFull := payload.ForceFull || ds.SyncMode == types.SyncModeFull

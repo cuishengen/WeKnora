@@ -2105,10 +2105,18 @@ func (h *KnowledgeHandler) PreviewKnowledgeFile(c *gin.Context) {
 		return
 	}
 
-	_, effCtx, err := h.resolveKnowledgeAndValidateKBAccess(c, id, types.OrgRoleViewer)
+	knowledge, effCtx, err := h.resolveKnowledgeAndValidateKBAccess(c, id, types.OrgRoleViewer)
 	if err != nil {
 		c.Error(err)
 		return
+	}
+	// Download-only originals must keep the same role gate on the preview URL.
+	if knowledge.SourceReference != nil || secutils.IsAttachmentExtension(knowledge.FileType) {
+		_, effCtx, err = h.resolveKnowledgeAndValidateKBAccess(c, id, types.OrgRoleEditor)
+		if err != nil {
+			c.Error(err)
+			return
+		}
 	}
 
 	file, filename, err := h.kgService.GetKnowledgeFile(effCtx, id)

@@ -83,6 +83,9 @@ func applyKnowledgeStagingTestMigration(t *testing.T, db *gorm.DB) {
 	migration, err := os.ReadFile("../../../migrations/sqlite/000052_knowledge_staging.up.sql")
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(string(migration)).Error)
+	referenceMigration, err := os.ReadFile("../../../migrations/sqlite/000053_source_file_reference.up.sql")
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(string(referenceMigration)).Error)
 }
 
 // insertProcessingKnowledge seeds a row in `processing` state ready for a
