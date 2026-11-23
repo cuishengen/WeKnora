@@ -49,6 +49,11 @@ func TestFilenameScopedComparisonKeepsPredicateWithoutRepeatingWildcard(t *testi
 		if len(query.KnowledgeIDs) == 0 {
 			continue
 		}
+		if query.DisableVectorMatch {
+			require.Equal(t, "MIC RAM", query.QueryText)
+			require.Equal(t, []string{"member"}, query.KnowledgeIDs)
+			continue
+		}
 		scoped++
 		require.NotContains(t, strings.ToLower(query.QueryText), "ab571x")
 		require.NotContains(t, strings.ToLower(query.QueryText), "ab572x")
@@ -57,6 +62,13 @@ func TestFilenameScopedComparisonKeepsPredicateWithoutRepeatingWildcard(t *testi
 		require.Contains(t, query.QueryText, "不要额外加入 cache")
 	}
 	require.Equal(t, 2, scoped)
+}
+
+func TestComparisonLiteralTermsExcludeModelNamesAndTrailingExclusions(t *testing.T) {
+	query := "比较 AB571X、AB572X 的 RAM，不要把 CACHE 另加进去"
+	require.Equal(t, "RAM", comparisonTerms(query, comparisonObjects(query)))
+	require.Equal(t, "ADC GPIO", comparisonTerms("比较 AB571x 和 AB572x 的 ADC GPIO", []string{"AB571x", "AB572x"}))
+	require.Empty(t, comparisonTerms("比较 AB571x 和 AB572x 的供电范围", []string{"AB571x", "AB572x"}))
 }
 
 func TestComparisonPreservesExplicitDocumentsAndPredicate(t *testing.T) {

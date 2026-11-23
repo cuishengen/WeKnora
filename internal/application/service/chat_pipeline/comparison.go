@@ -10,6 +10,29 @@ import (
 )
 
 var comparisonIdentifier = regexp.MustCompile(`(?i)\b[a-z]{2,8}[0-9]{2,10}[a-z0-9_*-]*\b`)
+var comparisonTechnicalTerm = regexp.MustCompile(`\b[A-Z][A-Z0-9]{1,11}\b`)
+
+// A supplemental literal lookup preserves technical abbreviations across
+// language differences between the question and the source. The full question
+// remains in the primary searches and answer, including every condition.
+func comparisonTerms(query string, objects []string) string {
+	query, _, _ = strings.Cut(query, "，")
+	seen := map[string]bool{}
+	for _, object := range objects {
+		seen[strings.ToUpper(object)] = true
+	}
+	var terms []string
+	for _, term := range comparisonTechnicalTerm.FindAllString(query, -1) {
+		if !seen[term] {
+			seen[term] = true
+			terms = append(terms, term)
+		}
+		if len(terms) == 3 {
+			break
+		}
+	}
+	return strings.Join(terms, " ")
+}
 
 // Keep literal product identifiers, without embedding any model names or facts.
 func comparisonObjects(query string) []string {
@@ -40,6 +63,7 @@ func comparisonPrefix(object string) string {
 // selected document/tag scope or reads another tenant's sources.
 func (p *PluginSearch) searchComparison(ctx context.Context, cm *types.ChatManage) []*types.SearchResult {
 	objects := comparisonObjects(cm.Query)
+	terms := comparisonTerms(cm.Query, objects)
 	var result []*types.SearchResult
 	for _, object := range objects {
 		query := cm.RewriteQuery
@@ -92,6 +116,15 @@ func (p *PluginSearch) searchComparison(ctx context.Context, cm *types.ChatManag
 			})
 			if err == nil {
 				result = append(result, found...)
+			}
+			if terms != "" && !cm.DisableKeywordsMatch {
+				literal, err := p.knowledgeBaseService.HybridSearch(ctx, target.KnowledgeBaseID, types.SearchParams{
+					QueryText: terms, KnowledgeIDs: ids, MatchCount: copyCM.EmbeddingTopK,
+					DisableVectorMatch: true, SkipContextEnrichment: true,
+				})
+				if err == nil {
+					result = append(result, literal...)
+				}
 			}
 		}
 	}
