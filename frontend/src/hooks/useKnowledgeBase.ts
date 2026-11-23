@@ -57,13 +57,15 @@ export default function (knowledgeBaseId?: string) {
 
         const { data, total: totalResult } = result;
     const cardList_ = data.map((item: any) => {
-      const rawName = item.file_name || item.title || item.source || t('knowledgeBase.untitledDocument')
+      const sourceName = item.source_reference?.relative_path?.split('/').pop()
+      const rawName = sourceName || item.file_name || item.title || item.source || t('knowledgeBase.untitledDocument')
       const dotIndex = rawName.lastIndexOf('.')
       const displayName = dotIndex > 0 ? rawName.substring(0, dotIndex) : rawName
-      const fileTypeSource = item.file_type || (item.type === 'manual' ? 'MANUAL' : '')
+      const fileTypeSource = sourceName?.split('.').pop() || item.file_type || (item.type === 'manual' ? 'MANUAL' : '')
       return {
         ...item,
-        original_file_name: item.file_name,
+        original_file_name: sourceName || item.file_name,
+        file_size: item.source_reference?.size ?? item.file_size,
         display_name: displayName,
         file_name: displayName,
         folder_path: item.folder_path || '',

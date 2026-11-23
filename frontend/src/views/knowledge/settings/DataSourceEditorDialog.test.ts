@@ -122,7 +122,7 @@ test('DokuWiki uses a paused source for validation and supports manual sync with
   try {
     f.vm.selectType(f.vm.connectorDefs.find((def: any) => def.type === 'dokuwiki_filesystem'))
     assert.equal(f.vm.form.config.settings.source_alias, 'vendor-wiki')
-    assert.deepEqual(Array.from(f.vm.dokuwikiSelectedFileTypes), ['txt', 'pdf', 'xlsx', 'xls', 'docx'])
+    assert.deepEqual(Array.from(f.vm.dokuwikiSelectedFileTypes), ['txt', 'pdf', 'xlsx', 'xls', 'docx', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'webp', 'attachments'])
     assert.equal(f.vm.form.sync_schedule, 'CRON_TZ=Asia/Shanghai 0 0 1 * * *')
     assert.equal(f.vm.form.sync_deletions, false)
     await f.vm.nextStep()

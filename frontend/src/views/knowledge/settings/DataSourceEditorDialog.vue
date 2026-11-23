@@ -209,7 +209,7 @@ function isDokuWikiConnector(type: string): boolean {
   return type === 'dokuwiki_filesystem'
 }
 
-const dokuwikiFileTypes = ['txt', 'pdf', 'xlsx', 'xls', 'docx']
+const dokuwikiFileTypes = ['txt', 'pdf', 'xlsx', 'xls', 'docx', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'webp', 'attachments']
 const dokuwikiSelectedFileTypes = computed<string[]>({
   get: () => form.value.config.settings.file_types ?? [...dokuwikiFileTypes],
   set: fileTypes => {
@@ -1821,7 +1821,7 @@ const drawerConfirmText = computed(() => {
           <label class="form-label required">{{ t('datasource.dokuwiki.formats') }}</label>
           <t-checkbox-group v-model="dokuwikiSelectedFileTypes" @change="invalidateDokuWikiConnection">
             <t-checkbox v-for="type in dokuwikiFileTypes" :key="type" :value="type">
-              {{ type === 'txt' ? t('datasource.dokuwiki.pageFormat') : type.toUpperCase() }}
+              {{ type === 'txt' ? t('datasource.dokuwiki.pageFormat') : type === 'attachments' ? t('datasource.dokuwiki.attachmentFormat') : type.toUpperCase() }}
             </t-checkbox>
           </t-checkbox-group>
           <p class="form-desc">{{ t('datasource.dokuwiki.formatsHint') }}</p>

@@ -99,6 +99,12 @@ const router = createRouter({
       meta: { requiresInit: true, requiresAuth: true },
       children: [
         {
+          path: 'source-download/:id',
+          name: 'sourceDownload',
+          component: () => import('../views/knowledge/SourceDownload.vue'),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "tenant",
           redirect: "/platform/settings"
         },

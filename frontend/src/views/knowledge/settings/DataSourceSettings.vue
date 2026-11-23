@@ -309,6 +309,15 @@ onBeforeUnmount(stopPolling)
                 >{{ pill.text }}</span>
               </template>
             </p>
+            <p v-if="ds.last_sync_cursor?.connector_cursor?.inventory" class="ds-card__detail">
+              {{ t('datasource.dokuwiki.inventory', {
+                total: ds.last_sync_cursor.connector_cursor.inventory.source_files,
+                completed: Object.keys(ds.last_sync_cursor.connector_cursor.files || {}).length,
+                images: ds.last_sync_cursor.connector_cursor.inventory.images,
+                attachments: ds.last_sync_cursor.connector_cursor.inventory.attachments,
+                failed: Object.keys(ds.last_sync_cursor.connector_cursor.failed || {}).length
+              }) }}
+            </p>
             <div v-if="ds.error_message" class="ds-card__error">
               <t-icon name="error-circle-filled" size="14px" />
               <span>{{ ds.error_message }}</span>
