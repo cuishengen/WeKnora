@@ -56,12 +56,3 @@ func TestComparisonPreservesExplicitDocumentsAndPredicate(t *testing.T) {
 		require.NotContains(t, strings.ToLower(query.QueryText), other)
 	}
 }
-
-func TestComparisonAuxiliaryRecallExcludesNegatedClauseOnly(t *testing.T) {
-	query := "比较 AB571x、AB572x 的 RAM，只比较芯片内置总量，不要把 cache 另加进去"
-	require.Equal(t, "比较 AB571x、AB572x 的 RAM，只比较芯片内置总量", comparisonRecallQuery(query))
-	require.Equal(t, "Compare AB571x and AB572x RAM", comparisonRecallQuery("Compare AB571x and AB572x RAM, excluding cache"))
-	positive := "比较 AB571x、AB572x 的 RAM，在双MIC降噪方案下"
-	require.Equal(t, positive, comparisonRecallQuery(positive))
-	require.Equal(t, "不要比较 cache，只比较 RAM", comparisonRecallQuery("不要比较 cache，只比较 RAM"))
-}

@@ -809,9 +809,11 @@ func generatedQuestionExclusionClause(kbIDs []string) clause.Expression {
 	}
 	return clause.Expr{
 		SQL: fmt.Sprintf(
-			"NOT (knowledge_base_id IN (%s) AND %s)",
+			// Column-to-column comparison filters break BM25 score plans on
+			// pg_search 0.25.11. The prefix test also implies source_id != chunk_id.
+			"NOT (knowledge_base_id IN (%s) AND source_type = %d AND chunk_id <> '' AND starts_with(source_id, chunk_id || '-'))",
 			strings.Join(placeholders, ", "),
-			types.GeneratedQuestionRowPredicate(""),
+			int(types.ChunkSourceType),
 		),
 		Vars: vars,
 	}
