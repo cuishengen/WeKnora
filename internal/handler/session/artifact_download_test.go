@@ -75,6 +75,10 @@ type artifactCatalogStub struct {
 	resource *types.StoredResource
 }
 
+func (s *artifactCatalogStub) IsResourcePublishedForRead(context.Context, string, uint64) (bool, error) {
+	return true, nil
+}
+
 func (s *artifactCatalogStub) ResolvePath(context.Context, string) (string, *types.StoredResource, error) {
 	return s.resource.PhysicalPath, s.resource, nil
 }

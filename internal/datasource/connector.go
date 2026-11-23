@@ -174,6 +174,14 @@ type ConnectorMetadata struct {
 // GetConnectorMetadata returns metadata for all available connectors
 // This is used by the frontend to display connector options
 var ConnectorMetadataRegistry = map[string]ConnectorMetadata{
+	types.ConnectorTypeDokuWikiFilesystem: {
+		Type:         types.ConnectorTypeDokuWikiFilesystem,
+		Name:         "DokuWiki (NAS)",
+		Description:  "Read original pages and documents from an administrator-approved read-only mount; deletion sync is unavailable",
+		Priority:     14,
+		AuthType:     "none",
+		Capabilities: []string{"incremental", "hierarchical"},
+	},
 	types.ConnectorTypeFeishu: {
 		Type:         types.ConnectorTypeFeishu,
 		Name:         "Feishu (飞书)",

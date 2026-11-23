@@ -85,6 +85,12 @@ var ErrUnavailable = errors.New("anydoc: binding not built into this binary")
 // the limit the converter reported.
 var ErrResourceLimit = errors.New("document is too large for the parser")
 
+// InputRejected reports a typed permanent input rejection. An unavailable
+// binding, I/O failure or missing PDF model is an operational failure instead.
+func InputRejected(err error) bool {
+	return errors.Is(err, ErrResourceLimit) || backendInputRejected(err)
+}
+
 // resourceLimiter is the method set anydoc's *ConvertError uses to report a
 // parser budget failure. The cgo binding implements it; the default build does
 // not import that package, so classification goes through this interface.

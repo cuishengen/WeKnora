@@ -61,6 +61,10 @@ type ResourceRegistration struct {
 	Size             int64
 	ContentHash      string
 	Temporary        bool
+	// A trusted writer may register ownership atomically with the resource.
+	OwnerType string
+	OwnerID   string
+	Relation  string
 }
 
 // GlobalResourceRegistrar records the concrete instance used by the process-wide writer.

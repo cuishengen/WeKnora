@@ -117,6 +117,15 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 	if kb.ID != payload.KnowledgeBaseID || kb.TenantID != payload.TenantID {
 		return fmt.Errorf("postprocess task KB owner changed: %w", asynq.SkipRetry)
 	}
+	if knowledge.IsStaged {
+		if err := validateNASStagingKB(kb, payload.TenantID); err != nil {
+			knowledge.ParseStatus, knowledge.ErrorMessage = types.ParseStatusFailed, err.Error()
+			if updateErr := s.knowledgeRepo.UpdateKnowledge(ctx, knowledge); updateErr != nil {
+				return updateErr
+			}
+			return err
+		}
+	}
 	ctx, err = access.WithKBTaskWrite(ctx, kb, payload.TenantID)
 	if err != nil {
 		return fmt.Errorf("invalid postprocess scope: %v: %w", err, asynq.SkipRetry)

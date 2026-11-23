@@ -12,6 +12,10 @@ import (
 
 type fileCatalog struct{ resource *types.StoredResource }
 
+func (c fileCatalog) IsResourcePublishedForRead(context.Context, string, uint64) (bool, error) {
+	return true, nil
+}
+
 func (c fileCatalog) ResolvePath(_ context.Context, ref string) (string, *types.StoredResource, error) {
 	if c.resource == nil {
 		return ref, nil, nil

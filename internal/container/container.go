@@ -64,6 +64,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/datasource"
 	confluenceConnector "github.com/Tencent/WeKnora/internal/datasource/connector/confluence"
 	dingtalkConnector "github.com/Tencent/WeKnora/internal/datasource/connector/dingtalk"
+	dokuwikiConnector "github.com/Tencent/WeKnora/internal/datasource/connector/dokuwiki"
 	"github.com/Tencent/WeKnora/internal/datasource/connector/feishu/core"
 	"github.com/Tencent/WeKnora/internal/datasource/connector/feishu/drive"
 	"github.com/Tencent/WeKnora/internal/datasource/connector/feishu/wiki"
@@ -545,8 +546,8 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Data source sync framework
 	logger.Debugf(ctx, "[Container] Registering data source sync framework...")
 	must(container.Provide(initConnectorRegistry))
-	must(container.Provide(datasource.NewScheduler))
-	must(container.Provide(service.NewDataSourceService))
+	must(container.Provide(initDataSourceScheduler))
+	must(container.Provide(initDataSourceService))
 	must(container.Invoke(startDataSourceScheduler))
 	logger.Debugf(ctx, "[Container] Data source sync framework registered")
 	must(container.Invoke(startAuditLogRetention))
@@ -2069,6 +2070,11 @@ func initConnectorRegistry() (*datasource.ConnectorRegistry, error) {
 	registry := datasource.NewConnectorRegistry()
 
 	var errs error
+	if connector, err := dokuwikiConnector.NewConnectorFromEnv(); err != nil {
+		errs = errors.Join(errs, err)
+	} else if err := registry.Register(connector); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("register dokuwiki connector: %w", err))
+	}
 	if err := registry.Register(wiki.NewConnector(core.RegionFeishu)); err != nil {
 		errs = errors.Join(errs, fmt.Errorf("register feishu connector: %w", err))
 	}
@@ -2117,6 +2123,34 @@ func initConnectorRegistry() (*datasource.ConnectorRegistry, error) {
 		return nil, errs
 	}
 	return registry, nil
+}
+
+func initDataSourceScheduler(
+	dsRepo interfaces.DataSourceRepository,
+	syncLogRepo interfaces.SyncLogRepository,
+	taskEnqueuer interfaces.TaskEnqueuer,
+	redisClient *redis.Client,
+) *datasource.Scheduler {
+	return datasource.NewScheduler(dsRepo, syncLogRepo, taskEnqueuer, redisClient)
+}
+
+// Keep Redis an explicit DI dependency; the constructor's optional argument
+// preserves compatibility with service tests and non-container callers.
+func initDataSourceService(
+	dsRepo interfaces.DataSourceRepository,
+	syncLogRepo interfaces.SyncLogRepository,
+	knowledgeService interfaces.KnowledgeService,
+	kbService interfaces.KnowledgeBaseService,
+	taskEnqueuer interfaces.TaskEnqueuer,
+	registry *datasource.ConnectorRegistry,
+	scheduler *datasource.Scheduler,
+	tenantRepo interfaces.TenantRepository,
+	tagService interfaces.KnowledgeTagService,
+	audit interfaces.AuditLogService,
+	redisClient *redis.Client,
+) interfaces.DataSourceService {
+	return service.NewDataSourceService(dsRepo, syncLogRepo, knowledgeService, kbService,
+		taskEnqueuer, registry, scheduler, tenantRepo, tagService, audit, redisClient)
 }
 
 // startDataSourceScheduler starts the data source cron scheduler and registers cleanup.

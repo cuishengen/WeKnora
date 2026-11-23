@@ -24,6 +24,11 @@ type pgRepository struct {
 	keywordScoreFunction string
 }
 
+// Apply before ranking/Top-K: unpublished candidates must not displace a
+// still-published predecessor. Retired tombstones also cover cleanup retries.
+const publishedKnowledgeIndexPredicate = "NOT EXISTS (SELECT 1 FROM knowledges publication " +
+	"WHERE publication.id = embeddings.knowledge_id AND (publication.is_staged = TRUE OR publication.deleted_at IS NOT NULL))"
+
 // NewPostgresRetrieveEngineRepository creates a new PostgreSQL retriever repository
 func NewPostgresRetrieveEngineRepository(db *gorm.DB) interfaces.RetrieveEngineRepository {
 	logger.GetLogger(context.Background()).Info("[Postgres] Initializing PostgreSQL retriever engine repository")
@@ -270,6 +275,7 @@ func (g *pgRepository) KeywordsRetrieve(ctx context.Context,
 		SQL:  "(is_enabled IS NULL OR is_enabled = ?)",
 		Vars: []interface{}{true},
 	})
+	conds = append(conds, clause.Expr{SQL: publishedKnowledgeIndexPredicate})
 	if exclusion := generatedQuestionExclusionClause(params.ExcludeGeneratedQuestionKBIDs); exclusion != nil {
 		conds = append(conds, exclusion)
 	}
@@ -401,6 +407,7 @@ func (g *pgRepository) VectorRetrieve(ctx context.Context,
 	// is_enabled filter
 	whereParts = append(whereParts, fmt.Sprintf("(is_enabled IS NULL OR is_enabled = $%d)", len(allVars)+1))
 	allVars = append(allVars, true)
+	whereParts = append(whereParts, publishedKnowledgeIndexPredicate)
 	if len(params.ExcludeGeneratedQuestionKBIDs) > 0 {
 		placeholders := make([]string, len(params.ExcludeGeneratedQuestionKBIDs))
 		paramStart := len(allVars) + 1

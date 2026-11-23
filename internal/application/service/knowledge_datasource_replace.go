@@ -16,12 +16,13 @@ type knowledgeReplacement struct {
 	tagIDs    []string
 	committed bool
 	keepFile  bool // a failed commit/read may still have published the new path
+	staged    bool // datasource candidate: preserve the predecessor until indexed
 }
 
 func (s *knowledgeService) checkKnowledgeForCreation(ctx context.Context, tenantID uint64, kbID string,
 	replacement *knowledgeReplacement, params *types.KnowledgeCheckParams,
 ) (bool, *types.Knowledge, error) {
-	if replacement != nil {
+	if replacement != nil && replacement.previous != nil {
 		params.ExcludeKnowledgeID = replacement.previous.ID
 	}
 	return s.repo.CheckKnowledgeExists(ctx, tenantID, kbID, params)
@@ -31,6 +32,14 @@ func (s *knowledgeService) persistKnowledgeForCreation(ctx context.Context, know
 	replacement *knowledgeReplacement,
 ) error {
 	if replacement == nil {
+		return s.repo.CreateKnowledge(ctx, knowledge)
+	}
+	if replacement.staged {
+		knowledge.IsStaged = true
+		if replacement.previous != nil {
+			id := replacement.previous.ID
+			knowledge.ReplacesKnowledgeID = &id
+		}
 		return s.repo.CreateKnowledge(ctx, knowledge)
 	}
 	// URL creation normally has no datasource metadata. Include it in the same
@@ -123,7 +132,7 @@ func (s *knowledgeService) ReplaceKnowledgeFromDataSource(ctx context.Context, k
 func (s *knowledgeService) attachCreationTags(ctx context.Context, knowledge *types.Knowledge,
 	tagIDs []string, replacement *knowledgeReplacement,
 ) error {
-	if replacement == nil {
+	if replacement == nil || replacement.staged {
 		return s.setAndAttachKnowledgeTags(ctx, knowledge.TenantID, knowledge.KnowledgeBaseID, knowledge, tagIDs)
 	}
 	s.attachTagsToKnowledge(ctx, knowledge)
@@ -134,7 +143,7 @@ func (s *knowledgeService) attachCreationTags(ctx context.Context, knowledge *ty
 // that allowance without changing the shared tenant snapshot before commit.
 func knowledgeCreationStorageUsed(tenant *types.Tenant, replacement *knowledgeReplacement) int64 {
 	used := tenant.StorageUsed
-	if replacement != nil {
+	if replacement != nil && !replacement.staged {
 		used -= replacement.previous.StorageSize
 	}
 	return used

@@ -32,6 +32,19 @@ func backendPDFInvalidStructure(err error) (malformed, typed bool) {
 	return convertErr != nil && convertErr.Kind == "malformed", true
 }
 
+func backendInputRejected(err error) bool {
+	var convertErr *upstream.ConvertError
+	if !errors.As(err, &convertErr) || convertErr == nil {
+		return false
+	}
+	switch convertErr.Kind {
+	case "unsupported", "malformed", "encrypted", "resource_limit", "missing_part":
+		return true
+	default:
+		return false
+	}
+}
+
 func backendConvert(data []byte, opts Options) (*Result, error) {
 	format, err := upstreamFormat(opts.Format)
 	if err != nil {

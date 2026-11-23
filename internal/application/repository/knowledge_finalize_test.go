@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -70,8 +71,18 @@ func setupKnowledgeTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.Exec(knowledgesTestDDL).Error)
+	applyKnowledgeStagingTestMigration(t, db)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
+}
+
+// Keep the historical, explicitly typed SQLite fixture while applying the real
+// publication migration used by current repository queries and model writes.
+func applyKnowledgeStagingTestMigration(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	migration, err := os.ReadFile("../../../migrations/sqlite/000052_knowledge_staging.up.sql")
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(string(migration)).Error)
 }
 
 // insertProcessingKnowledge seeds a row in `processing` state ready for a

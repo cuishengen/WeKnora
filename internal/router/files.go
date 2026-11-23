@@ -113,13 +113,40 @@ func resolveCatalogResource(
 		return "", false, false
 	}
 	if resource == nil {
+		if !requirePublishedResource(c, catalog, filePath, ownerTenantID) {
+			return "", false, false
+		}
 		return filePath, false, true
 	}
 	if resource.TenantID != ownerTenantID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden: resource not accessible"})
 		return "", false, false
 	}
+	if !requirePublishedResource(c, catalog, filePath, ownerTenantID) {
+		return "", false, false
+	}
 	return resolvedPath, true, true
+}
+
+// Publication never grants access: callers retain their tenant, KB, message or
+// signed-capability checks. A lookup error must not expose candidate bytes.
+func requirePublishedResource(c *gin.Context, catalog interfaces.ResourceCatalog, reference string, tenantID uint64) bool {
+	if catalog == nil {
+		return true
+	}
+	lookup, ok := catalog.(interface {
+		IsResourcePublishedForRead(context.Context, string, uint64) (bool, error)
+	})
+	if !ok {
+		c.Status(http.StatusNotFound)
+		return false
+	}
+	published, err := lookup.IsResourcePublishedForRead(c.Request.Context(), reference, tenantID)
+	if err != nil || !published {
+		c.Status(http.StatusNotFound)
+		return false
+	}
+	return true
 }
 
 // resolveFileService picks the file service for (tenant, backendID, provider)
@@ -272,6 +299,9 @@ func serveResourceGrants(
 		resource, err := resourceCatalog.ResolveAccessGrant(ctx, c.Param("token"))
 		if err != nil || resource == nil {
 			c.Status(http.StatusNotFound)
+			return
+		}
+		if !requirePublishedResource(c, resourceCatalog, types.BuildResourcePath(resource.Handle), resource.TenantID) {
 			return
 		}
 		tenant, err := tenantService.GetTenantByID(ctx, resource.TenantID)
@@ -531,8 +561,8 @@ func serveMessageScopedFiles(
 // Without this it is otherwise impossible to tell whether a "broken image" is
 // caused by an expired signature, a stale URL cached by the platform, the
 // platform's IP being blocked, or the URL simply never reaching us.
-func servePresignedFiles(r *gin.Engine, tenantService interfaces.TenantService, storageResolver interfaces.StorageBackendResolver) {
-	handler := presignedFileHandler(tenantService, localStorageAbsDir(), storageResolver)
+func servePresignedFiles(r *gin.Engine, tenantService interfaces.TenantService, storageResolver interfaces.StorageBackendResolver, catalogs ...interfaces.ResourceCatalog) {
+	handler := presignedFileHandlerWithResources(tenantService, localStorageAbsDir(), storageResolver, firstResourceCatalog(catalogs))
 	r.GET("/api/v1/files/presigned", handler)
 	r.HEAD("/api/v1/files/presigned", handler)
 }
@@ -546,6 +576,10 @@ func presignedFileHandler(tenantService interfaces.TenantService, absDir string,
 	if len(resolvers) > 0 {
 		storageResolver = resolvers[0]
 	}
+	return presignedFileHandlerWithResources(tenantService, absDir, storageResolver, nil)
+}
+
+func presignedFileHandlerWithResources(tenantService interfaces.TenantService, absDir string, storageResolver interfaces.StorageBackendResolver, resourceCatalog interfaces.ResourceCatalog) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		clientIP := c.ClientIP()
@@ -583,6 +617,9 @@ func presignedFileHandler(tenantService interfaces.TenantService, absDir string,
 			logger.Warnf(ctx, "[Router] /files/presigned sig invalid or expired: client_ip=%s ua=%q tenant_id=%d file_path=%q expires=%s",
 				clientIP, userAgent, tenantID, filePath, expiresStr)
 			c.JSON(http.StatusForbidden, gin.H{"error": "invalid or expired signature"})
+			return
+		}
+		if !requirePublishedResource(c, resourceCatalog, filePath, tenantID) {
 			return
 		}
 

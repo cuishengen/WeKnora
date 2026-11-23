@@ -36,7 +36,7 @@ func (r *chunkRepository) ListImageAssets(
 		// DISTINCT in a subquery, not COUNT(DISTINCT): postgres always sorts
 		// for the latter, while the former walks the copies index in order.
 		count = "SELECT COUNT(*) FROM (SELECT DISTINCT i.image_key FROM chunk_images i " +
-			"WHERE i.knowledge_base_id = ? AND i.tenant_id = ?) d"
+			"WHERE i.knowledge_base_id = ? AND i.tenant_id = ? AND " + publishedImageOwnerClause + ") d"
 	}
 	dir := " ASC"
 	if q.SortDesc {
@@ -71,8 +71,15 @@ func (r *chunkRepository) ListImageAssets(
 // winnerClause keeps one copy per image: the one on the most recently updated
 // chunk, ties broken by chunk id and then array position. The copies index
 // serves the probe.
+const publishedImageOwnerClause = "NOT EXISTS (SELECT 1 FROM knowledges publication WHERE publication.id = i.knowledge_id " +
+	"AND (publication.is_staged = true OR publication.deleted_at IS NOT NULL))"
+
+const competingImageOwnerClause = "NOT EXISTS (SELECT 1 FROM knowledges publication WHERE publication.id = o.knowledge_id " +
+	"AND (publication.is_staged = true OR publication.deleted_at IS NOT NULL))"
+
 const winnerClause = "NOT EXISTS (SELECT 1 FROM chunk_images o " +
 	"WHERE o.knowledge_base_id = i.knowledge_base_id AND o.tenant_id = i.tenant_id " +
+	"AND " + competingImageOwnerClause + " " +
 	"AND o.image_key = i.image_key AND (o.updated_at > i.updated_at " +
 	"OR (o.updated_at = i.updated_at AND (o.chunk_id < i.chunk_id " +
 	"OR (o.chunk_id = i.chunk_id AND o.image_index < i.image_index)))))"
@@ -82,6 +89,7 @@ const winnerClause = "NOT EXISTS (SELECT 1 FROM chunk_images o " +
 // carries it too.
 const scopedWinnerClause = "NOT EXISTS (SELECT 1 FROM chunk_images o " +
 	"WHERE o.knowledge_base_id = i.knowledge_base_id AND o.tenant_id = i.tenant_id " +
+	"AND " + competingImageOwnerClause + " " +
 	"AND o.image_key = i.image_key AND o.knowledge_id IN ? AND (o.updated_at > i.updated_at " +
 	"OR (o.updated_at = i.updated_at AND (o.chunk_id < i.chunk_id " +
 	"OR (o.chunk_id = i.chunk_id AND o.image_index < i.image_index)))))"
@@ -101,7 +109,7 @@ type imageAssetDialect struct {
 func (d imageAssetDialect) where(
 	tenantID uint64, kbID string, q *types.ImageAssetQuery,
 ) (sql string, args []any, filtered bool) {
-	clauses := []string{"i.knowledge_base_id = ?", "i.tenant_id = ?"}
+	clauses := []string{"i.knowledge_base_id = ?", "i.tenant_id = ?", publishedImageOwnerClause}
 	args = []any{kbID, tenantID}
 	if q.IsEnabled != nil {
 		clauses = append(clauses, "i.is_enabled = ?")
@@ -155,7 +163,7 @@ func (d imageAssetDialect) where(
 		clauses = append(clauses, "(("+on+") OR NOT ("+off+"))")
 		args = append(append(args, onArgs...), offArgs...)
 	}
-	filtered = len(clauses) > 2
+	filtered = len(clauses) > 3
 	winner := winnerClause
 	if len(q.KnowledgeIDs) > 0 {
 		winner = scopedWinnerClause

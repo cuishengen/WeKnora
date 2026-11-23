@@ -234,6 +234,19 @@ func (r *SyncLogRepository) FindLatest(ctx context.Context, dsID string) (*types
 }
 
 // HasRunningSync checks if a data source has any sync currently in "running" status.
+func (r *SyncLogRepository) FindRunning(ctx context.Context, dsID string) (*types.SyncLog, error) {
+	if dsID == "" {
+		return nil, errors.New("data source id is empty")
+	}
+	var row types.SyncLog
+	err := r.db.WithContext(ctx).Where("data_source_id = ? AND status = ?", dsID, types.SyncLogStatusRunning).
+		Order("started_at DESC").First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &row, err
+}
+
 func (r *SyncLogRepository) HasRunningSync(ctx context.Context, dsID string) (bool, error) {
 	if dsID == "" {
 		return false, errors.New("data source id is empty")

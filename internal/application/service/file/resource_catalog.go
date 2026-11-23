@@ -82,6 +82,8 @@ func (s *resourceCatalogFileService) register(
 	size int64,
 	temporary bool,
 	contentHash string,
+	ownerID string,
+	relation string,
 ) (string, error) {
 	kind, mimeType := resourceKind(name)
 	register := s.catalog.Register
@@ -93,14 +95,18 @@ func (s *resourceCatalogFileService) register(
 		}
 		register = registrar.RegisterGlobal
 	}
-	ref, err := register(ctx, tenantID, physical, interfaces.ResourceRegistration{
+	meta := interfaces.ResourceRegistration{
 		Kind:         kind,
 		MimeType:     mimeType,
 		OriginalName: filepath.Base(name),
 		Size:         size,
 		ContentHash:  contentHash,
 		Temporary:    temporary,
-	})
+	}
+	if ownerID != "" {
+		meta.OwnerType, meta.OwnerID, meta.Relation = types.ResourceOwnerKnowledge, ownerID, relation
+	}
+	ref, err := register(ctx, tenantID, physical, meta)
 	if err != nil {
 		_ = s.inner.DeleteFile(ctx, physical)
 		return "", fmt.Errorf("register stored resource: %w", err)
@@ -118,15 +124,9 @@ func (s *resourceCatalogFileService) SaveFile(
 	if err != nil {
 		return "", err
 	}
-	ref, err := s.register(ctx, physical, tenantID, file.Filename, file.Size, false, "")
+	ref, err := s.register(ctx, physical, tenantID, file.Filename, file.Size, false, "", knowledgeID, types.ResourceRelationSourceFile)
 	if err != nil {
 		return "", err
-	}
-	if knowledgeID != "" {
-		if err := s.catalog.Bind(ctx, ref, types.ResourceOwnerKnowledge, knowledgeID, types.ResourceRelationSourceFile); err != nil {
-			_ = s.DeleteFile(ctx, ref)
-			return "", fmt.Errorf("bind stored resource: %w", err)
-		}
 	}
 	return ref, nil
 }
@@ -157,6 +157,7 @@ func (s *resourceCatalogFileService) SaveBytes(
 ) (string, error) {
 	sum := sha256.Sum256(data)
 	contentHash := hex.EncodeToString(sum[:])
+	ownerID := types.KnowledgeResourceOwner(ctx)
 
 	// Identical bytes pulled out of one document — the same logo or mascot on
 	// several pages — used to be written once per occurrence and registered as
@@ -173,6 +174,11 @@ func (s *resourceCatalogFileService) SaveBytes(
 	if !temp && isImagePayload(fileName, data) {
 		ref, ok, err := s.catalog.ReuseByContentHash(ctx, tenantID, contentHash)
 		if err == nil && ok {
+			if ownerID != "" {
+				if err := s.catalog.Bind(ctx, ref, types.ResourceOwnerKnowledge, ownerID, types.ResourceRelationExtractedImage); err != nil {
+					return "", fmt.Errorf("bind reused document resource: %w", err)
+				}
+			}
 			return ref, nil
 		}
 		// Fail open: a lookup failure or a miss must never stop bytes from
@@ -183,7 +189,7 @@ func (s *resourceCatalogFileService) SaveBytes(
 	if err != nil {
 		return "", err
 	}
-	return s.register(ctx, physical, tenantID, fileName, int64(len(data)), temp, contentHash)
+	return s.register(ctx, physical, tenantID, fileName, int64(len(data)), temp, contentHash, ownerID, types.ResourceRelationExtractedImage)
 }
 
 func (s *resourceCatalogFileService) resolve(ctx context.Context, value string) (string, bool, error) {
@@ -242,15 +248,9 @@ func (s *resourceCatalogFileService) CopyFile(
 	if err != nil {
 		return "", err
 	}
-	ref, err := s.register(ctx, copied, tenantID, filepath.Base(physical), 0, false, "")
+	ref, err := s.register(ctx, copied, tenantID, filepath.Base(physical), 0, false, "", knowledgeID, types.ResourceRelationSourceFile)
 	if err != nil {
 		return "", err
-	}
-	if knowledgeID != "" {
-		if err := s.catalog.Bind(ctx, ref, types.ResourceOwnerKnowledge, knowledgeID, types.ResourceRelationSourceFile); err != nil {
-			_ = s.DeleteFile(ctx, ref)
-			return "", fmt.Errorf("bind copied resource: %w", err)
-		}
 	}
 	return ref, nil
 }

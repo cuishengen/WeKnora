@@ -13,6 +13,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 	"github.com/robfig/cron/v3"
 )
 
@@ -46,6 +47,7 @@ type Scheduler struct {
 	dsRepo       interfaces.DataSourceRepository
 	syncLogRepo  interfaces.SyncLogRepository
 	taskEnqueuer interfaces.TaskEnqueuer
+	redisClient  *redis.Client
 
 	mu      sync.Mutex
 	entries map[string]cron.EntryID // dataSourceID → cron entry ID
@@ -56,8 +58,9 @@ func NewScheduler(
 	dsRepo interfaces.DataSourceRepository,
 	syncLogRepo interfaces.SyncLogRepository,
 	taskEnqueuer interfaces.TaskEnqueuer,
+	redisClients ...*redis.Client,
 ) *Scheduler {
-	return &Scheduler{
+	s := &Scheduler{
 		cron: cron.New(cron.WithParser(syncScheduleParser), cron.WithChain(
 			cron.Recover(cron.DefaultLogger),
 		)),
@@ -66,6 +69,10 @@ func NewScheduler(
 		taskEnqueuer: taskEnqueuer,
 		entries:      make(map[string]cron.EntryID),
 	}
+	if len(redisClients) > 0 {
+		s.redisClient = redisClients[0]
+	}
+	return s
 }
 
 // Start loads all active data sources from the database and registers their
@@ -197,6 +204,26 @@ func (s *Scheduler) triggerSync(dataSourceID string, tenantID uint64) {
 		logger.Infof(ctx, "[Scheduler] skipping sync for ds=%s (not active or not found)", dataSourceID)
 		return
 	}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := WithSourceEnqueueLock(ctx, s.redisClient, ds, func(lockCtx context.Context) error {
+			run, err := FindRunningSync(lockCtx, s.syncLogRepo, ds.ID)
+			if err != nil || run != nil {
+				return err
+			}
+			s.enqueueSync(lockCtx, ds)
+			return nil
+		}); err != nil {
+			logger.Errorf(ctx, "[Scheduler] failed to coalesce NAS sync for ds=%s: %v", ds.ID, err)
+		}
+		return
+	}
+	s.enqueueSync(ctx, ds)
+}
+
+func (s *Scheduler) enqueueSync(ctx context.Context, ds *types.DataSource) {
+	dataSourceID, tenantID := ds.ID, ds.TenantID
 
 	// Layer 1: prevent overlap with a still-running sync
 	if running, _ := s.syncLogRepo.HasRunningSync(ctx, dataSourceID); running {
@@ -229,7 +256,7 @@ func (s *Scheduler) triggerSync(dataSourceID string, tenantID uint64) {
 	// Layer 2: deterministic TaskID — all instances in the same minute produce the same ID
 	taskID := fmt.Sprintf("dssync:%s:%s", dataSourceID, time.Now().UTC().Truncate(time.Minute).Format("200601021504"))
 
-	_, err = s.taskEnqueuer.Enqueue(task,
+	_, err := s.taskEnqueuer.Enqueue(task,
 		asynq.Queue(types.QueueSync),
 		asynq.MaxRetry(5),
 		asynq.Timeout(2*time.Hour),

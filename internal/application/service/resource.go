@@ -54,7 +54,22 @@ func (s *resourceCatalog) Register(
 	if tenantID == 0 || physicalPath == "" {
 		return "", fmt.Errorf("resource registration requires tenant and physical path")
 	}
+	if (meta.OwnerType == "") != (meta.OwnerID == "") {
+		return "", fmt.Errorf("resource registration requires both owner type and id")
+	}
 	if _, ok := types.ParseResourcePath(physicalPath); ok {
+		if meta.OwnerID != "" {
+			resource, err := s.Resolve(ctx, physicalPath)
+			if err != nil {
+				return "", err
+			}
+			if resource.TenantID != tenantID {
+				return "", fmt.Errorf("resource owner tenant mismatch")
+			}
+			if err := s.bindRegisteredOwner(ctx, resource, meta); err != nil {
+				return "", err
+			}
+		}
 		return physicalPath, nil
 	}
 	locationHash := resourceLocationHash(physicalPath)
@@ -67,6 +82,9 @@ func (s *resourceCatalog) Register(
 			if _, err := s.repo.BindStorageBackend(ctx, existing.ID, meta.StorageBackendID); err != nil {
 				return "", err
 			}
+		}
+		if err := s.bindRegisteredOwner(ctx, existing, meta); err != nil {
+			return "", err
 		}
 		return types.BuildResourcePath(existing.Handle), nil
 	}
@@ -106,7 +124,7 @@ func (s *resourceCatalog) Register(
 			ContentHash:      meta.ContentHash,
 			Lifecycle:        lifecycle,
 		}
-		if err := s.repo.Create(ctx, resource); err == nil {
+		if err := s.createRegisteredResource(ctx, resource, meta); err == nil {
 			return types.BuildResourcePath(handle), nil
 		} else if !strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return "", err
@@ -117,6 +135,9 @@ func (s *resourceCatalog) Register(
 				if _, err := s.repo.BindStorageBackend(ctx, existing.ID, backendID); err != nil {
 					return "", err
 				}
+			}
+			if err := s.bindRegisteredOwner(ctx, existing, meta); err != nil {
+				return "", err
 			}
 			return types.BuildResourcePath(existing.Handle), nil
 		}

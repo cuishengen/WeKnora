@@ -25,6 +25,25 @@ type FileCatalog interface {
 	ResolvePath(context.Context, string) (string, *types.StoredResource, error)
 }
 
+// checkFilePublication supplements, never replaces, the caller's existing ACL.
+// All production file catalogs implement this optional publication capability.
+func checkFilePublication(ctx context.Context, catalog FileCatalog, reference string, tenantID uint64) error {
+	if catalog == nil {
+		return nil
+	}
+	lookup, ok := catalog.(interface {
+		IsResourcePublishedForRead(context.Context, string, uint64) (bool, error)
+	})
+	if !ok {
+		return ErrNotFound
+	}
+	published, err := lookup.IsResourcePublishedForRead(ctx, reference, tenantID)
+	if err != nil || !published {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func resolveFile(
 	ctx context.Context,
 	catalog FileCatalog,
@@ -90,6 +109,9 @@ func ResolveKBFile(
 	}
 	if !bound {
 		return empty, ErrForbidden
+	}
+	if err := checkFilePublication(ctx, catalog, reference, owner); err != nil {
+		return empty, err
 	}
 	file.OwnerTenantID = owner
 	return file, nil
@@ -258,6 +280,9 @@ func AuthorizeMessageFile(ctx context.Context, message *types.Message, reference
 			return FileAccess{}, ErrForbidden
 		}
 	}
+	if err := checkFilePublication(ctx, catalog, reference, owner); err != nil {
+		return FileAccess{}, err
+	}
 	file.OwnerTenantID = owner
 	return file, nil
 }
@@ -287,6 +312,9 @@ func ResolveMessageArtifact(ctx context.Context, message *types.Message, index i
 	}
 	if (resource != nil && resource.TenantID == caller.TenantID) ||
 		(resource == nil && secutils.ValidateStoragePathTenant(file.Path, caller.TenantID) == nil) {
+		if err := checkFilePublication(ctx, catalog, artifact.URL, caller.TenantID); err != nil {
+			return FileAccess{}, err
+		}
 		file.OwnerTenantID = caller.TenantID
 		file.Filename = artifact.FileName
 		return file, nil

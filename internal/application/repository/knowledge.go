@@ -41,7 +41,7 @@ func escapeLikeKeyword(keyword string) string {
 // counter jump back up and never reach zero (the "stuck
 // pending_subtasks_count / never promoted to completed" bug). Omitting
 // the column here means Save can never touch it.
-var omitFieldsOnUpdate = []string{"DeletedAt", "PendingSubtasksCount"}
+var omitFieldsOnUpdate = []string{"DeletedAt", "PendingSubtasksCount", "IsStaged", "ReplacesKnowledgeID"}
 
 // knowledgeRepository implements knowledge base and knowledge repository interface
 type knowledgeRepository struct {
@@ -93,7 +93,7 @@ func (r *knowledgeRepository) ListKnowledgeByKnowledgeBaseID(
 	ctx context.Context, tenantID uint64, kbID string,
 ) ([]*types.Knowledge, error) {
 	var knowledges []*types.Knowledge
-	if err := r.db.WithContext(ctx).Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID).
+	if err := r.db.WithContext(ctx).Where("tenant_id = ? AND knowledge_base_id = ? AND is_staged = ?", tenantID, kbID, false).
 		Order("created_at DESC").Find(&knowledges).Error; err != nil {
 		return nil, err
 	}
@@ -114,6 +114,7 @@ func (r *knowledgeRepository) ListKnowledgeProfileRows(
 		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID).
 		Where("parse_status IN ?", []string{types.ParseStatusCompleted, types.ParseStatusFinalizing}).
 		Where("enable_status = ?", "enabled").
+		Where("is_staged = ?", false).
 		Order("created_at ASC").
 		Scan(&rows).Error
 	if err != nil {
@@ -126,6 +127,7 @@ func (r *knowledgeRepository) ListKnowledgeProfileRows(
 // KnowledgeListFilter to a GORM query. Tenant / knowledge base scoping must be
 // applied by the caller before invoking this helper.
 func applyKnowledgeListFilter(query *gorm.DB, filter types.KnowledgeListFilter) *gorm.DB {
+	query = query.Where("knowledges.is_staged = ?", false)
 	if len(filter.TagIDs) > 0 {
 		query = query.Where(
 			"knowledges.id IN (SELECT knowledge_id FROM knowledge_tag_relations WHERE tag_id IN (?))",
@@ -267,6 +269,7 @@ func (r *knowledgeRepository) ListKnowledgeFolderCounts(
 		Select("folder_path AS folder_path, COUNT(*) AS count").
 		Where("tenant_id = ? AND knowledge_base_id = ? AND parse_status <> ?",
 			tenantID, kbID, types.ParseStatusDeleting).
+		Where("is_staged = ?", false).
 		Group("folder_path").
 		Find(&counts).Error; err != nil {
 		return nil, err
@@ -394,8 +397,13 @@ func (r *knowledgeRepository) GetKnowledgeBatch(
 	ctx context.Context, tenantID uint64, ids []string,
 ) ([]*types.Knowledge, error) {
 	var knowledge []*types.Knowledge
-	if err := r.db.WithContext(ctx).
-		Where("tenant_id = ? AND id IN ?", tenantID, ids).
+	query := r.db.WithContext(ctx).Where("tenant_id = ? AND id IN ?", tenantID, ids)
+	if allowed := types.StagedKnowledgeReadIDs(ctx); len(allowed) > 0 {
+		query = query.Where("is_staged = ? OR id IN ?", false, allowed)
+	} else {
+		query = query.Where("is_staged = ?", false)
+	}
+	if err := query.
 		Find(&knowledge).Error; err != nil {
 		return nil, err
 	}
@@ -410,7 +418,7 @@ func (r *knowledgeRepository) GetKnowledgeBatchByIDOnly(
 		return nil, nil
 	}
 	var knowledge []*types.Knowledge
-	if err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&knowledge).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("id IN ? AND is_staged = ?", ids, false).Find(&knowledge).Error; err != nil {
 		return nil, err
 	}
 	return knowledge, nil
@@ -432,7 +440,7 @@ func (r *knowledgeRepository) CheckKnowledgeExists(
 	// "document already exists" that only manual SQL could clear (issue #3338).
 	query := r.db.WithContext(ctx).Model(&types.Knowledge{}).
 		Where("tenant_id = ? AND knowledge_base_id = ? AND parse_status NOT IN ?",
-			tenantID, kbID, []string{"failed", "deleting"})
+			tenantID, kbID, []string{"failed", "deleting"}).Where("is_staged = ?", false)
 
 	if params.ExcludeKnowledgeID != "" {
 		query = query.Where("id <> ?", params.ExcludeKnowledgeID)
@@ -811,6 +819,7 @@ func (r *knowledgeRepository) CountKnowledgeByKnowledgeBaseID(
 	err := r.db.WithContext(ctx).Model(&types.Knowledge{}).
 		Where("tenant_id = ? AND knowledge_base_id = ? AND parse_status <> ?",
 			tenantID, kbID, types.ParseStatusDeleting).
+		Where("is_staged = ?", false).
 		Count(&count).Error
 	return count, err
 }
@@ -830,6 +839,7 @@ func (r *knowledgeRepository) CountKnowledgeByStatus(
 	query := r.db.WithContext(ctx).Model(&types.Knowledge{}).
 		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID).
 		Where("parse_status IN ?", parseStatuses)
+	query = query.Where("is_staged = ?", false)
 
 	if err := query.Count(&count).Error; err != nil {
 		return 0, err
@@ -853,7 +863,7 @@ func (r *knowledgeRepository) FindByMetadataKey(
 ) (*types.Knowledge, error) {
 	var knowledge types.Knowledge
 	err := r.db.WithContext(ctx).
-		Where("tenant_id = ? AND knowledge_base_id = ? AND deleted_at IS NULL", tenantID, kbID).
+		Where("tenant_id = ? AND knowledge_base_id = ? AND deleted_at IS NULL AND is_staged = ?", tenantID, kbID, false).
 		Where("metadata->>? = ?", key, value).
 		First(&knowledge).Error
 	if err != nil {
@@ -891,7 +901,7 @@ func (r *knowledgeRepository) FindByMetadataKeyPrefix(
 	// wildcards (e.g. \_) literal on both PostgreSQL and SQLite.
 	keyExpr := "metadata->>'" + strings.ReplaceAll(key, "'", "''") + "'"
 	err := r.db.WithContext(ctx).
-		Where("tenant_id = ? AND knowledge_base_id = ? AND deleted_at IS NULL", tenantID, kbID).
+		Where("tenant_id = ? AND knowledge_base_id = ? AND deleted_at IS NULL AND is_staged = ?", tenantID, kbID, false).
 		Where(keyExpr+" LIKE ? ESCAPE ?", escaped+"%", `\`).
 		Find(&items).Error
 	if err != nil {
@@ -909,7 +919,7 @@ func (r *knowledgeRepository) FindByDataSourceExternalID(
 ) (*types.Knowledge, error) {
 	var knowledge types.Knowledge
 	err := r.db.WithContext(ctx).
-		Where("tenant_id = ? AND knowledge_base_id = ? AND deleted_at IS NULL", tenantID, kbID).
+		Where("tenant_id = ? AND knowledge_base_id = ? AND deleted_at IS NULL AND is_staged = ?", tenantID, kbID, false).
 		Where("metadata->>'datasource_id' = ? AND metadata->>'external_id' = ?", dataSourceID, externalID).
 		First(&knowledge).Error
 	if err != nil {
@@ -960,7 +970,7 @@ func (r *knowledgeRepository) SearchKnowledge(
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = knowledges.knowledge_base_id").
 		Where("knowledges.tenant_id = ?", tenantID).
 		Where("knowledge_bases.type = ?", types.KnowledgeBaseTypeDocument).
-		Where("knowledges.deleted_at IS NULL")
+		Where("knowledges.deleted_at IS NULL AND knowledges.is_staged = ?", false)
 
 	// If keyword is provided, filter by file_name or title (case-insensitive).
 	if keyword != "" {
@@ -1083,7 +1093,7 @@ func (r *knowledgeRepository) SearchKnowledgeInScopes(
 		Joins("JOIN knowledge_bases ON knowledge_bases.id = knowledges.knowledge_base_id AND knowledge_bases.tenant_id = knowledges.tenant_id").
 		Where(scopeCondition, args...).
 		Where("knowledge_bases.type = ?", types.KnowledgeBaseTypeDocument).
-		Where("knowledges.deleted_at IS NULL")
+		Where("knowledges.deleted_at IS NULL AND knowledges.is_staged = ?", false)
 
 	if keyword != "" {
 		escaped := strings.ToLower(escapeLikeKeyword(keyword))
@@ -1188,7 +1198,7 @@ func (r *knowledgeRepository) ListIDsByTagIDs(
 	var ids []string
 	err := r.db.WithContext(ctx).Model(&types.Knowledge{}).
 		Joins("JOIN knowledge_tag_relations ktr ON knowledges.id = ktr.knowledge_id").
-		Where("knowledges.tenant_id = ? AND knowledges.knowledge_base_id = ? AND ktr.tag_id IN (?)",
+		Where("knowledges.is_staged = false AND knowledges.tenant_id = ? AND knowledges.knowledge_base_id = ? AND ktr.tag_id IN (?)",
 			tenantID, kbID, tagIDs).
 		Distinct("knowledges.id").
 		Pluck("knowledges.id", &ids).Error

@@ -20,8 +20,8 @@ func (r *resourceRepository) IsReferencedByKnowledgeBase(
 		Joins("JOIN knowledge_bases AS kb ON kb.id = k.knowledge_base_id "+
 			"AND kb.tenant_id = k.tenant_id AND kb.deleted_at IS NULL").
 		Where("b.resource_id = ? AND b.owner_type = ? AND b.tenant_id = ? "+
-			"AND k.knowledge_base_id = ? AND k.deleted_at IS NULL",
-			resourceID, types.ResourceOwnerKnowledge, tenantID, kbID).Count(&count).Error
+			"AND k.knowledge_base_id = ? AND k.deleted_at IS NULL AND k.is_staged = ?",
+			resourceID, types.ResourceOwnerKnowledge, tenantID, kbID, false).Count(&count).Error
 	return count > 0, err
 }
 
@@ -36,8 +36,8 @@ func (r *resourceRepository) GetMessageFileBindings(
 		Joins("JOIN knowledges AS k ON k.id = b.owner_id AND k.tenant_id = b.tenant_id").
 		Joins("JOIN knowledge_bases AS kb ON kb.id = k.knowledge_base_id "+
 			"AND kb.tenant_id = k.tenant_id AND kb.deleted_at IS NULL").
-		Where("b.resource_id = ? AND b.owner_type = ? AND b.tenant_id = ? AND k.deleted_at IS NULL",
-			resourceID, types.ResourceOwnerKnowledge, tenantID).
+		Where("b.resource_id = ? AND b.owner_type = ? AND b.tenant_id = ? AND k.deleted_at IS NULL AND k.is_staged = ?",
+			resourceID, types.ResourceOwnerKnowledge, tenantID, false).
 		Distinct("k.knowledge_base_id").Pluck("k.knowledge_base_id", &result.KnowledgeBaseIDs).Error
 	if err != nil {
 		return nil, err

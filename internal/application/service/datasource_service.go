@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"mime/multipart"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/application/access"
+	"github.com/Tencent/WeKnora/internal/common/redislock"
 	"github.com/Tencent/WeKnora/internal/datasource"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
@@ -21,6 +23,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 // DataSourceService implements the DataSourceService interface
@@ -35,6 +38,7 @@ type DataSourceService struct {
 	tenantRepo        interfaces.TenantRepository
 	tagService        interfaces.KnowledgeTagService
 	audit             interfaces.AuditLogService
+	redisClient       *redis.Client
 }
 
 // NewDataSourceService creates a new data source service
@@ -49,8 +53,9 @@ func NewDataSourceService(
 	tenantRepo interfaces.TenantRepository,
 	tagService interfaces.KnowledgeTagService,
 	audit interfaces.AuditLogService,
+	redisClients ...*redis.Client,
 ) interfaces.DataSourceService {
-	return &DataSourceService{
+	s := &DataSourceService{
 		dsRepo:            dsRepo,
 		syncLogRepo:       syncLogRepo,
 		knowledgeService:  knowledgeService,
@@ -62,12 +67,24 @@ func NewDataSourceService(
 		tagService:        tagService,
 		audit:             audit,
 	}
+	if len(redisClients) > 0 {
+		s.redisClient = redisClients[0]
+	}
+	return s
 }
 
 // CreateDataSource creates a new data source configuration
 func (s *DataSourceService) CreateDataSource(ctx context.Context, ds *types.DataSource) (*types.DataSource, error) {
 	if ds == nil {
 		return nil, datasource.ErrDataSourceInvalid
+	}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		if ds.SyncDeletions {
+			return nil, fmt.Errorf("NAS source deletion sync is not supported")
+		}
+		if driver := strings.TrimSpace(os.Getenv("RETRIEVE_DRIVER")); driver != "" && driver != "postgres" {
+			return nil, fmt.Errorf("NAS staged publication currently requires PostgreSQL retrieval")
+		}
 	}
 	if err := datasource.ValidateSyncSchedule(ds.SyncSchedule); err != nil {
 		return nil, err
@@ -80,6 +97,11 @@ func (s *DataSourceService) CreateDataSource(ctx context.Context, ds *types.Data
 	}
 	if kb.TenantID != ds.TenantID {
 		return nil, datasource.ErrKnowledgeBaseNotFound
+	}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		if err := validateNASStagingKB(kb, ds.TenantID); err != nil {
+			return nil, err
+		}
 	}
 
 	// Validate connector type
@@ -168,6 +190,9 @@ func (s *DataSourceService) updateDataSource(
 	if ds == nil || ds.ID == "" {
 		return nil, datasource.ErrDataSourceInvalid
 	}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem && ds.SyncDeletions {
+		return nil, fmt.Errorf("NAS source deletion sync is not supported")
+	}
 
 	// Verify data source exists
 	existing, err := s.dsRepo.FindByID(ctx, ds.ID)
@@ -231,7 +256,7 @@ func (s *DataSourceService) updateDataSource(
 		configActuallyChanged = !reflect.DeepEqual(*mergedCfg, *existingParsedCfg)
 	}
 	hasCreds := mergedCfg != nil && mergedCfg.HasConfiguredCredentials(ds.Type)
-	if hasCreds && (ds.Type != existing.Type || configActuallyChanged) {
+	if (hasCreds || ds.Type == types.ConnectorTypeDokuWikiFilesystem) && (ds.Type != existing.Type || configActuallyChanged) {
 		if err := s.validateDataSourceConfig(ctx, ds); err != nil {
 			return nil, err
 		}
@@ -493,6 +518,24 @@ func (s *DataSourceService) ManualSync(ctx context.Context, dsID string) (*types
 	if err != nil {
 		return nil, err
 	}
+	if ds.Type != types.ConnectorTypeDokuWikiFilesystem {
+		return s.manualSync(ctx, ds)
+	}
+	var run *types.SyncLog
+	err = datasource.WithSourceEnqueueLock(ctx, s.redisClient, ds, func(lockCtx context.Context) error {
+		var err error
+		run, err = datasource.FindRunningSync(lockCtx, s.syncLogRepo, ds.ID)
+		if err != nil || run != nil {
+			return err
+		}
+		run, err = s.manualSync(lockCtx, ds)
+		return err
+	})
+	return run, err
+}
+
+func (s *DataSourceService) manualSync(ctx context.Context, ds *types.DataSource) (*types.SyncLog, error) {
+	dsID := ds.ID
 
 	if ds.Status != types.DataSourceStatusActive &&
 		ds.Status != types.DataSourceStatusError &&
@@ -626,6 +669,23 @@ func (s *DataSourceService) GetSyncLog(ctx context.Context, syncLogID string) (*
 
 // ProcessSync handles the actual sync operation (called by asynq task)
 func (s *DataSourceService) ProcessSync(ctx context.Context, task *asynq.Task) error {
+	var payload types.DataSourceSyncPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		return err
+	}
+	ds, err := s.dsRepo.FindByID(ctx, payload.DataSourceID)
+	if err != nil || ds == nil || ds.Type != types.ConnectorTypeDokuWikiFilesystem {
+		return s.processSync(ctx, task)
+	}
+	if s.redisClient == nil {
+		return fmt.Errorf("NAS source synchronization requires the renewable Redis source lock")
+	}
+	return redislock.WithRenewableLock(ctx, s.redisClient,
+		fmt.Sprintf("weknora:datasource:%d:%s", ds.TenantID, ds.ID), time.Minute, 15*time.Second,
+		func(lockCtx context.Context) error { return s.processSync(lockCtx, task) })
+}
+
+func (s *DataSourceService) processSync(ctx context.Context, task *asynq.Task) error {
 	var payload types.DataSourceSyncPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 		logger.Errorf(ctx, "failed to unmarshal sync payload: %v", err)
@@ -1124,6 +1184,15 @@ func (h *streamSyncHandler) Emit(ctx context.Context, item types.FetchedItem) er
 	}
 	h.result.Total++
 	nonBlocking, err := h.svc.applyFetchedItem(withKBActivitySuppressed(ctx), h.ds, &item, h.tagIDs, h.result)
+	if h.ds.Type == types.ConnectorTypeDokuWikiFilesystem && err != nil {
+		var rejected *datasource.DocumentParseFailure
+		if errors.As(err, &rejected) {
+			h.nonBlockingFailures++
+			return err // Connector records failure without acknowledging this hash.
+		}
+		h.ingestErr = err
+		return err
+	}
 	if nonBlocking || errors.Is(err, ErrInvalidFileType) {
 		h.nonBlockingFailures++
 		return nil
@@ -1307,6 +1376,13 @@ func (s *DataSourceService) updateSyncRunResult(
 	errorMessage string,
 	wasPaused bool,
 ) {
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem && status == types.SyncLogStatusFailed && ctx.Err() != nil {
+		// Result bookkeeping may finish after cancellation; publication and
+		// cursor advancement always retain the original execution context.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+	}
 	syncLog.ItemsTotal = result.Total
 	syncLog.ItemsCreated = result.Created
 	syncLog.ItemsUpdated = result.Updated
@@ -1464,6 +1540,38 @@ func (s *DataSourceService) ingestItem(ctx context.Context, ds *types.DataSource
 	}
 	for k, v := range item.Metadata {
 		metadata[k] = v
+	}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		stager, ok := s.knowledgeService.(interface {
+			StageDataSourceKnowledge(context.Context, *types.DataSource, *types.FetchedItem,
+				map[string]string, []string, string, func(context.Context) error) (bool, error)
+		})
+		if !ok {
+			return false, fmt.Errorf("knowledge service does not support NAS staged publication")
+		}
+		verify := func(verifyCtx context.Context) error {
+			current, err := s.dsRepo.FindByID(verifyCtx, ds.ID)
+			if err != nil || current == nil || current.TenantID != ds.TenantID ||
+				current.KnowledgeBaseID != ds.KnowledgeBaseID || current.Type != ds.Type || !bytes.Equal(current.Config, ds.Config) {
+				return fmt.Errorf("datasource configuration changed")
+			}
+			connector, err := s.connectorRegistry.Get(ds.Type)
+			if err != nil {
+				return err
+			}
+			verifier, ok := connector.(interface {
+				VerifyFetchedItem(context.Context, *types.DataSourceConfig, *types.FetchedItem) error
+			})
+			if !ok {
+				return fmt.Errorf("NAS connector cannot verify its source snapshot")
+			}
+			cfg, err := current.ParseConfig()
+			if err != nil {
+				return err
+			}
+			return verifier.VerifyFetchedItem(verifyCtx, cfg, item)
+		}
+		return stager.StageDataSourceKnowledge(ctx, ds, item, metadata, tagIDs, channel, verify)
 	}
 
 	// Existing items are replaced through a short DB transaction. Validation and

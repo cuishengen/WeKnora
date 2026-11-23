@@ -28,6 +28,7 @@ import (
 func imageAssetBackends(t *testing.T, fn func(t *testing.T, db *gorm.DB)) {
 	t.Run("sqlite", func(t *testing.T) {
 		db := setupChunkTestDB(t)
+		require.NoError(t, db.AutoMigrate(&types.Knowledge{}))
 		applyChunkImagesMigration(t, db)
 		fn(t, db)
 	})
@@ -38,7 +39,7 @@ func imageAssetBackends(t *testing.T, fn func(t *testing.T, db *gorm.DB)) {
 		}
 		db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		require.NoError(t, err)
-		require.NoError(t, db.AutoMigrate(&types.Chunk{}))
+		require.NoError(t, db.AutoMigrate(&types.Chunk{}, &types.Knowledge{}))
 		applyChunkImagesMigration(t, db)
 		fn(t, db)
 	})
@@ -140,6 +141,35 @@ var (
 	fieldText    = types.ImageAssetField{Attr: "contain.text"}
 	fieldVisual  = types.ImageAssetField{Attr: "contain.data_visual"}
 )
+
+func TestListImageAssetsHidesStagedCopiesWithoutHidingPublishedImage(t *testing.T) {
+	imageAssetBackends(t, func(t *testing.T, db *gorm.DB) {
+		fx := newImageFixture(t, db)
+		published := fx.add("text", 1, fixtureImage{URL: "local://shared.png", Caption: "published"})
+		staged := *published
+		staged.ID, staged.KnowledgeID = uuid.NewString(), "staged-"+fx.kbID
+		staged.UpdatedAt = fx.base.Add(10 * time.Minute)
+		payload, err := json.Marshal([]fixtureImage{
+			{URL: "local://shared.png", Caption: "secret replacement"},
+			{URL: "local://hidden.png", Caption: "secret only"},
+		})
+		require.NoError(t, err)
+		staged.ImageInfo = string(payload)
+		require.NoError(t, db.Create(&types.Knowledge{ID: staged.KnowledgeID, TenantID: 1, KnowledgeBaseID: fx.kbID, IsStaged: true}).Error)
+		require.NoError(t, db.Create(&staged).Error)
+		rows, total := fx.list(types.ImageAssetQuery{})
+		require.EqualValues(t, 1, total)
+		require.Len(t, rows, 1)
+		require.Equal(t, published.ID, rows[0].ChunkID)
+		require.Equal(t, "published", rows[0].Caption)
+		rows, total = fx.list(types.ImageAssetQuery{Keyword: "secret", SearchFields: []types.ImageAssetField{fieldCaption}})
+		require.Empty(t, rows)
+		require.Zero(t, total)
+		rows, total = fx.list(types.ImageAssetQuery{KnowledgeIDs: []string{staged.KnowledgeID}})
+		require.Empty(t, rows)
+		require.Zero(t, total)
+	})
+}
 
 func TestListImageAssets_DedupsAndExpandsArrays(t *testing.T) {
 	imageAssetBackends(t, func(t *testing.T, db *gorm.DB) {

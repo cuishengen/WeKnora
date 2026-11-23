@@ -1150,7 +1150,7 @@ func (s *customAgentService) readableSuggestionKnowledgeIDs(ctx context.Context,
 	readable := make([]string, 0, len(knowledgeIDs))
 	for _, id := range knowledgeIDs {
 		knowledge, err := s.knowledgeRepo.GetKnowledgeByIDOnly(ctx, id)
-		if err != nil || knowledge == nil {
+		if err != nil || knowledge == nil || knowledge.IsStaged {
 			continue
 		}
 		ok, err := permissions.Check(knowledge.KnowledgeBaseID, knowledge.TenantID, types.OrgRoleViewer)

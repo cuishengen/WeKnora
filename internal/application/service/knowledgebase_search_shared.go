@@ -23,7 +23,9 @@ func (s *knowledgeBaseService) fetchKnowledgeData(ctx context.Context,
 
 	knowledgeMap := make(map[string]*types.Knowledge, len(knowledges))
 	for _, knowledge := range knowledges {
-		knowledgeMap[knowledge.ID] = knowledge
+		if !knowledge.IsStaged {
+			knowledgeMap[knowledge.ID] = knowledge
+		}
 	}
 
 	return knowledgeMap, nil
@@ -43,7 +45,7 @@ func (s *knowledgeBaseService) fetchKnowledgeDataWithShared(ctx context.Context,
 	permissions := kbReadPermissions(ctx, s.kbShareService)
 	knowledgeMap := make(map[string]*types.Knowledge, len(rows))
 	appendAllowed := func(k *types.Knowledge) {
-		if k == nil {
+		if k == nil || k.IsStaged {
 			return
 		}
 		allowed, err := permissions.Check(k.KnowledgeBaseID, k.TenantID, types.OrgRoleViewer)

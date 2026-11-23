@@ -140,6 +140,12 @@ func (s *chunkService) GetChunkByIDOnly(ctx context.Context, id string) (*types.
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{"chunk_id": id})
 		return nil, err
 	}
+	if s.knowledgeRepo != nil && chunk != nil {
+		owner, ownerErr := s.knowledgeRepo.GetKnowledgeByID(ctx, chunk.TenantID, chunk.KnowledgeID)
+		if ownerErr != nil || owner == nil || owner.IsStaged {
+			return nil, ErrChunkNotFound
+		}
+	}
 	return chunk, nil
 }
 

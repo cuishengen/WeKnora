@@ -3646,6 +3646,7 @@ func (s *knowledgeService) ProcessManualUpdate(ctx context.Context, t *asynq.Tas
 	ctx = logger.WithRequestID(ctx, payload.RequestId)
 	ctx = logger.WithField(ctx, "manual_process", payload.KnowledgeID)
 	ctx = types.WithExecutionTenant(ctx, payload.TenantID)
+	ctx = types.WithKnowledgeResourceOwner(ctx, payload.KnowledgeID)
 
 	tenantInfo, err := s.tenantRepo.GetTenantByID(ctx, payload.TenantID)
 	if err != nil {
@@ -3701,6 +3702,12 @@ func (s *knowledgeService) ProcessManualUpdate(ctx context.Context, t *asynq.Tas
 	}
 	if kb == nil || kb.ID != payload.KnowledgeBaseID || kb.TenantID != payload.TenantID {
 		return fmt.Errorf("processing task KB owner changed: %w", asynq.SkipRetry)
+	}
+	if knowledge.IsStaged {
+		if err := validateNASStagingKB(kb, payload.TenantID); err != nil {
+			_, taskErr := s.failKnowledge(ctx, knowledge, true, "%v", err)
+			return taskErr
+		}
 	}
 	ctx, err = access.WithKBTaskWrite(ctx, kb, payload.TenantID)
 	if err != nil {
@@ -3761,6 +3768,7 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 	ctx = logger.WithRequestID(ctx, payload.RequestId)
 	ctx = logger.WithField(ctx, "document_process", payload.KnowledgeID)
 	ctx = types.WithExecutionTenant(ctx, payload.TenantID)
+	ctx = types.WithKnowledgeResourceOwner(ctx, payload.KnowledgeID)
 	if payload.Language != "" {
 		ctx = context.WithValue(ctx, types.LanguageContextKey, payload.Language)
 	}
@@ -4416,6 +4424,14 @@ func (s *knowledgeService) convert(
 	}
 
 	result, err := s.callDocReaderWithTimeout(ctx, reader, req)
+	// Typed malformed/size failures come from local parser input, not from
+	// storage, RPC, model or quota failures. Persist a server-owned marker so a
+	// resumed NAS scan can skip only this document and keep its old publication.
+	contentRejected := errors.Is(err, docparser.ErrCSVMarkdownTooLarge) || anydoc.InputRejected(err) ||
+		anydoc.PDFInvalidStructure(err)
+	if contentRejected && knowledge.IsStaged {
+		result, err = &types.ReadResult{Error: stagedDocumentRejectionPrefix + err.Error()}, nil
+	}
 	// Parser resource limits are permanent document rejections, not transient reader failures.
 	if errors.Is(err, docparser.ErrCSVMarkdownTooLarge) || errors.Is(err, anydoc.ErrResourceLimit) {
 		result, err = &types.ReadResult{Error: err.Error()}, nil
@@ -4434,6 +4450,10 @@ func (s *knowledgeService) convert(
 			kb.ID, knowledge.ID, req.FileName, fileType, parserEngine, result.Error)
 		knowledge.ParseStatus = "failed"
 		knowledge.ErrorMessage = result.Error
+		if knowledge.IsStaged && !strings.HasPrefix(knowledge.ErrorMessage, stagedDocumentRejectionPrefix) &&
+			anydoc.PDFInvalidStructure(errors.New(result.Error)) {
+			knowledge.ErrorMessage = stagedDocumentRejectionPrefix + result.Error
+		}
 		knowledge.UpdatedAt = time.Now()
 		if err := s.updateKnowledgeUnlessSourceReplaced(ctx, knowledge); err != nil {
 			logger.Errorf(ctx, "failed to persist parser error for %s: %v", knowledge.ID, err)

@@ -57,6 +57,7 @@ func setupLikeEscapeTestDB(t *testing.T) *gorm.DB {
 	// The knowledges / knowledge_bases schemas are inlined by the existing
 	// helpers (AutoMigrate does not map their jsonb columns onto SQLite).
 	require.NoError(t, db.Exec(knowledgesTestDDL).Error)
+	applyKnowledgeStagingTestMigration(t, db)
 	require.NoError(t, db.Exec(knowledgeBasesTestDDL).Error)
 	require.NoError(t, db.Exec(likeEscapeTestDDL).Error)
 	require.NoError(t, db.AutoMigrate(

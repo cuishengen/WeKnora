@@ -1,0 +1,9 @@
+# Build frontend/dist from this fork with its package-lock.json before assembling.
+# UI_BASE must identify the pinned upstream v0.9.0 runtime by digest.
+ARG UI_BASE
+FROM ${UI_BASE}
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.source="https://github.com/cuishengen/WeKnora" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}"
+RUN rm -rf /usr/share/nginx/html/*
+COPY dist/ /usr/share/nginx/html/

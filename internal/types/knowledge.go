@@ -167,6 +167,10 @@ func (order KnowledgeListSortOrder) Valid() bool {
 type Knowledge struct {
 	// Unique identifier of the knowledge
 	ID string `json:"id"                 gorm:"type:varchar(36);primaryKey" extensions:"x-agent=knowledge_id"`
+	// Publication is independent of parse progress. Only datasource staging
+	// and its guarded commit may set these fields; public request bodies cannot.
+	IsStaged            bool    `json:"-" gorm:"not null;default:false"`
+	ReplacesKnowledgeID *string `json:"-" gorm:"type:varchar(36)"`
 	// Workspace ID
 	TenantID uint64 `json:"tenant_id"`
 	// ID of the knowledge base

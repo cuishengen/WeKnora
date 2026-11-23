@@ -597,6 +597,9 @@ func (s *knowledgeService) GetKnowledgeByID(ctx context.Context, id string) (*ty
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 
 	knowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, id)
+	if err == nil && knowledge != nil && knowledge.IsStaged {
+		return nil, repository.ErrKnowledgeNotFound
+	}
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"knowledge_id": id,
@@ -619,7 +622,11 @@ func (s *knowledgeService) GetKnowledgeByID(ctx context.Context, id string) (*ty
 
 // GetKnowledgeByIDOnly retrieves knowledge by ID without tenant filter (for permission resolution).
 func (s *knowledgeService) GetKnowledgeByIDOnly(ctx context.Context, id string) (*types.Knowledge, error) {
-	return s.repo.GetKnowledgeByIDOnly(ctx, id)
+	row, err := s.repo.GetKnowledgeByIDOnly(ctx, id)
+	if err == nil && row != nil && row.IsStaged {
+		return nil, repository.ErrKnowledgeNotFound
+	}
+	return row, err
 }
 
 // GetOwningKBCreatorID walks knowledge_id -> kb_id -> KB.CreatorID for
@@ -811,6 +818,9 @@ func (s *knowledgeService) GetKnowledgeFile(ctx context.Context, id string) (io.
 	if err != nil {
 		return nil, "", err
 	}
+	if knowledge == nil || knowledge.IsStaged {
+		return nil, "", repository.ErrKnowledgeNotFound
+	}
 
 	// Manual knowledge stores content in Metadata — stream it directly as a .md file.
 	if knowledge.IsManual() {
@@ -929,7 +939,7 @@ func (s *knowledgeService) GetKnowledgeBatchWithSharedAccess(ctx context.Context
 	ownList := make([]*types.Knowledge, 0, len(rows))
 	foundSet := make(map[string]bool)
 	appendAllowed := func(k *types.Knowledge) {
-		if k == nil || foundSet[k.ID] {
+		if k == nil || k.IsStaged || foundSet[k.ID] {
 			return
 		}
 		allowed, err := permissions.Check(k.KnowledgeBaseID, k.TenantID, types.OrgRoleViewer)

@@ -27,6 +27,14 @@ type stubResourceCatalog struct {
 	resource     *types.StoredResource
 	fileBindings *types.MessageFileBindings
 	bound        func(context.Context, uint64, string, string) (bool, error)
+	published    func(context.Context, string, uint64) (bool, error)
+}
+
+func (s *stubResourceCatalog) IsResourcePublishedForRead(ctx context.Context, ref string, tenant uint64) (bool, error) {
+	if s.published == nil {
+		return true, nil
+	}
+	return s.published(ctx, ref, tenant)
 }
 
 type stubMessageFileLookup struct {

@@ -215,7 +215,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 	serveFilesWithResources(r, params.FileService, params.StorageBackendResolver, params.ResourceCatalog)
 
 	// Presigned file access: no auth required, signature-verified.
-	servePresignedFiles(r, params.TenantService, params.StorageBackendResolver)
+	servePresignedFiles(r, params.TenantService, params.StorageBackendResolver, params.ResourceCatalog)
 
 	// Diagnostic preview of presigned URLs (Admin only, behind auth middleware).
 	servePresignedPreview(r, params.Config, params.StorageBackendResolver, params.ResourceCatalog)
