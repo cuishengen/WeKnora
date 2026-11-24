@@ -168,20 +168,13 @@ func (s *sessionService) AgentQA(
 	logger.Infof(ctx, "Agent context window: %d tokens (model %s declares %d)",
 		agentConfig.MaxContextTokens, effectiveModelID, modelContextWindow)
 
-	// Get rerank model from custom agent config only when knowledge_search can
-	// actually run. A disabled KB scope makes all KB tools ineffective, so it
-	// must not force users to configure an otherwise-unused rerank model.
+	// Resolve an optional reranker only when knowledge search can run. An
+	// unset model keeps the existing retrieval order; an explicitly configured
+	// model must still resolve successfully rather than silently being ignored.
 	var rerankModel rerank.Reranker
 	if agentRequiresRerankModel(req.CustomAgent) {
-		// Rerank model is resolved purely from the agent config now.
-		// We used to fall back to ConversationConfig.RerankModelID at
-		// the tenant level, but that path encouraged "leave rerank
-		// blank on the agent and inherit silently" which made debugging
-		// retrieval quality a guessing game across tenant settings vs
-		// agent settings. Forcing the agent to declare its own rerank
-		// model puts the configuration where the user actually edits
-		// the agent. If a Wiki-only agent doesn't need reranking,
-		// agentRequiresRerankModel() below already lets it pass.
+		// Custom agents use only their explicit setting. Internal agents keep
+		// the existing workspace fallback because users cannot configure them.
 		rerankModelID := req.CustomAgent.Config.RerankModelID
 		if rerankModelID == "" && types.UsesWorkspaceModelFallback(req.CustomAgent) {
 			// Nobody can set a rerank model on an internal agent, so it takes
@@ -197,8 +190,7 @@ func (s *sessionService) AgentQA(
 					req.CustomAgent.ID)
 			}
 		} else if rerankModelID == "" {
-			logger.Warnf(ctx, "No rerank model configured for custom agent %s, but knowledge_search tool is enabled", req.CustomAgent.ID)
-			return errors.New("rerank model is not configured: please set rerank_model_id on the agent")
+			logger.Infof(ctx, "No rerank model configured for custom agent %s; preserving retrieval order", req.CustomAgent.ID)
 		}
 
 		if rerankModelID != "" {

@@ -30,14 +30,14 @@ test('rejects a configured chat model that no longer exists', () => {
   ), false)
 })
 
-test('requires rerank when search_knowledge has a knowledge-base scope', () => {
+test('recognizes search_knowledge as eligible for an optional reranker', () => {
   assert.equal(agentRequiresRerankModel({
     kb_selection_mode: 'all',
     allowed_tools: ['search_knowledge'],
   }), true)
 })
 
-test('still requires rerank for configs saved with the retired knowledge_search name', () => {
+test('recognizes retired retrieval aliases as eligible for an optional reranker', () => {
   assert.equal(agentRequiresRerankModel({
     kb_selection_mode: 'all',
     allowed_tools: ['knowledge_search'],
@@ -118,17 +118,35 @@ test('getAgentNotReadyReasonKeys flags missing chat model', () => {
   ), ['summary_model'])
 })
 
-test('getAgentNotReadyReasonKeys requires rerank only in agent mode with KB search', () => {
+test('getAgentNotReadyReasonKeys permits missing optional rerank with KB search', () => {
   assert.deepEqual(getAgentNotReadyReasonKeys(
     { kb_selection_mode: 'all', allowed_tools: ['search_knowledge'] },
     [{ id: 'chat-1', type: 'KnowledgeQA' }, { id: 'rerank-1', type: 'Rerank' }],
     { isAgentMode: true, isSharedAgent: false },
-  ), ['summary_model', 'rerank_model'])
+  ), ['summary_model'])
   assert.deepEqual(getAgentNotReadyReasonKeys(
     { kb_selection_mode: 'all', allowed_tools: ['knowledge_search'] },
     [{ id: 'chat-1', type: 'KnowledgeQA' }, { id: 'rerank-1', type: 'Rerank' }],
     { isAgentMode: true, isSharedAgent: false },
-  ), ['summary_model', 'rerank_model'])
+  ), ['summary_model'])
+})
+
+test('search agent with its chat model is ready without a reranker', () => {
+  assert.deepEqual(getAgentNotReadyReasonKeys(
+    { model_id: 'chat-1', kb_selection_mode: 'selected', allowed_tools: ['search_knowledge'] },
+    [{ id: 'chat-1', type: 'KnowledgeQA' }],
+    { isAgentMode: true, isSharedAgent: false },
+  ), [])
+})
+
+test('an explicitly configured missing or wrong-type reranker remains not ready', () => {
+  for (const rerank_model_id of ['deleted-rerank', 'chat-1']) {
+    assert.deepEqual(getAgentNotReadyReasonKeys(
+      { model_id: 'chat-1', rerank_model_id, kb_selection_mode: 'selected', allowed_tools: ['search_knowledge'] },
+      [{ id: 'chat-1', type: 'KnowledgeQA' }],
+      { isAgentMode: true, isSharedAgent: false },
+    ), ['rerank_model'])
+  }
 })
 
 test('getAgentNotReadyReasonKeys does not treat current shared context as shared without sourceTenantId', () => {

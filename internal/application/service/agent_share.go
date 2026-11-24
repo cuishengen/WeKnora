@@ -24,16 +24,13 @@ var (
 	// workspace has its own copy under the same ID, so a shared built-in would
 	// be indistinguishable from the receiver's own agent.
 	ErrBuiltinAgentNotShareable = errors.New("built-in agents cannot be shared")
-	ErrAgentNotConfigured       = errors.New(
-		"agent is not fully configured (missing required chat model, or rerank model when the search_knowledge " +
-			"tool is enabled)",
-	)
+	ErrAgentNotConfigured       = errors.New("agent is not fully configured (missing required chat model)")
 )
 
-// agentRequiresRerankModel returns true when the agent's configured scope and
-// tools will actually invoke the reranker at runtime. An agent whose knowledge
-// base scope is explicitly disabled cannot run search_knowledge, so it does not
-// need a rerank model even if that tool remains in AllowedTools.
+// agentRequiresRerankModel retains its historical name: it reports whether the
+// effective tools can use a configured reranker, not whether one is required.
+// Without a reranker, search_knowledge preserves its normal retrieval order.
+// A disabled knowledge-base scope cannot run search_knowledge at all.
 //
 // This mirrors the runtime check in session_agent_qa.go: only
 // `search_knowledge` with an enabled knowledge-base scope uses the reranker.
@@ -43,7 +40,7 @@ var (
 //
 // When AllowedTools was never set the runtime uses
 // tools.DefaultAllowedTools(), which includes search_knowledge, so that case
-// requires the reranker; an empty list registers no tool and does not.
+// can use the reranker; an empty list registers no tool and does not.
 func agentRequiresRerankModel(agent *types.CustomAgent) bool {
 	if agent == nil {
 		return false
@@ -219,9 +216,6 @@ func (s *agentShareService) ShareAgent(ctx context.Context, agentID string, orgI
 	}
 
 	if agent.Config.ModelID == "" {
-		return nil, ErrAgentNotConfigured
-	}
-	if agentRequiresRerankModel(agent) && agent.Config.RerankModelID == "" {
 		return nil, ErrAgentNotConfigured
 	}
 

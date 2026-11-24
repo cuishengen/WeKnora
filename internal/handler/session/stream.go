@@ -443,9 +443,14 @@ func (h *Handler) handleAgentEventsForSSE(
 					return
 				}
 
-				// Check for completion event
-				if evt.Type == "complete" {
+				// Agent setup can fail before an EventAgentComplete is emitted.
+				// A terminal error must close SSE after delivering the error;
+				// ordinary tool/progress events also use Done and must keep going.
+				if evt.Type == "complete" || (evt.Type == types.ResponseTypeError && evt.Done) {
 					streamCompleted = true
+					if evt.Type == types.ResponseTypeError {
+						waitForTitle = false
+					}
 				}
 
 				// Check for title event

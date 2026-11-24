@@ -26,9 +26,9 @@ export function agentHasConfiguredChatModel(
 /**
  * Keep this aligned with backend agentRequiresRerankModel.
  *
- * Rerank is needed only when search_knowledge can actually run. Explicitly
- * disabling the knowledge-base scope makes KB tools ineffective, even if an
- * older agent configuration still contains the tool in allowed_tools.
+ * The historical function name identifies when search can use a configured
+ * reranker. The model is optional: an unset model preserves retrieval order.
+ * Disabling the knowledge-base scope makes KB tools ineffective.
  *
  * Stored configs may still carry the retired `knowledge_search` name (and
  * `grep_chunks`, which was folded into search_knowledge); those count too.
@@ -61,7 +61,7 @@ export function getAgentNotReadyReasonKeys(
 
   if (options.isAgentMode && agentRequiresRerankModel(config)) {
     const rerankModelID = config?.rerank_model_id?.trim()
-    const rerankExists = !!rerankModelID && (
+    const rerankExists = !rerankModelID || (
       options.isSharedAgent
       || models.some(model => model.type === 'Rerank' && model.id === rerankModelID)
     )
