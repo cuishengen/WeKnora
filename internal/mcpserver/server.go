@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/ratelimit"
@@ -166,6 +167,11 @@ func (s *Server) guardTool(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError("unauthorized"), nil
 		}
+		if ep.EmployeeBinding != nil || companyidentity.RequireEmployeeMCP() {
+			if err := companyidentity.Revalidate(ctx); err != nil {
+				return mcp.NewToolResultError("employee access could not be verified; reconnect or contact the administrator"), nil
+			}
+		}
 		if !ep.HasTool(req.Params.Name) {
 			return mcp.NewToolResultErrorf("tool %q is not enabled on this endpoint", req.Params.Name), nil
 		}
@@ -211,6 +217,7 @@ func (s *Server) toolCatalog() []server.ServerTool {
 		{Tool: grepChunksTool(), Handler: s.handleGrepChunks},
 		{Tool: listDocumentsTool(), Handler: s.handleListDocuments},
 		{Tool: readDocumentTool(), Handler: s.handleReadDocument},
+		{Tool: getOriginalDocumentTool(), Handler: s.handleGetOriginalDocument},
 		{Tool: askTool(), Handler: s.handleAsk},
 		{Tool: wikiSearchTool(), Handler: s.handleWikiSearch},
 		{Tool: wikiReadPageTool(), Handler: s.handleWikiReadPage},

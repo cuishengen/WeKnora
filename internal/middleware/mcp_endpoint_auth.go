@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/Tencent/WeKnora/internal/application/service"
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -33,6 +35,10 @@ func MCPEndpointAuth(svc interfaces.MCPEndpointService, tenantSvc interfaces.Ten
 		ep, err := svc.Authenticate(c.Request.Context(), endpointID, token)
 		if err != nil {
 			switch {
+			case errors.Is(err, companyidentity.ErrDenied):
+				c.JSON(http.StatusForbidden, gin.H{"error": "employee access denied"})
+			case errors.Is(err, companyidentity.ErrUnavailable):
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "employee verification unavailable"})
 			case errors.Is(err, service.ErrMCPEndpointDisabled):
 				c.JSON(http.StatusForbidden, gin.H{"error": "mcp endpoint disabled"})
 			case errors.Is(err, service.ErrMCPEndpointTokenInvalid), errors.Is(err, service.ErrMCPEndpointNotFound):
@@ -75,6 +81,29 @@ func MCPEndpointAuth(svc interfaces.MCPEndpointService, tenantSvc interfaces.Ten
 			Extra:       map[types.ContextKey]any{types.MCPEndpointContextKey: ep},
 			AuthSource:  types.AuthSourceMCPEndpoint,
 		})
+		if ep.EmployeeBinding != nil || companyidentity.RequireEmployeeMCP() {
+			ctx := companyidentity.WithRevalidation(c.Request.Context(), func(ctx context.Context) error {
+				current, err := svc.Authenticate(ctx, endpointID, token)
+				if err != nil {
+					return err
+				}
+				// If an administrator changed scope while this request was in
+				// flight, require a new request carrying the fresh context.
+				if current.TenantID != ep.TenantID || current.DefaultAgentID != ep.DefaultAgentID ||
+					!reflect.DeepEqual(current.EmployeeBinding, ep.EmployeeBinding) ||
+					!reflect.DeepEqual(current.KnowledgeBaseIDs, ep.KnowledgeBaseIDs) ||
+					!reflect.DeepEqual(current.Tools, ep.Tools) {
+					return companyidentity.ErrDenied
+				}
+				tenant, err := tenantSvc.GetTenantByID(ctx, current.TenantID)
+				if err != nil || tenant == nil || strings.EqualFold(tenant.Status, "disabled") ||
+					strings.EqualFold(tenant.Status, "inactive") {
+					return companyidentity.ErrDenied
+				}
+				return nil
+			})
+			c.Request = c.Request.WithContext(ctx)
+		}
 		c.Next()
 	}
 }

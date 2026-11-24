@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Tencent/WeKnora/internal/application/access"
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -41,6 +42,8 @@ type mcpEndpointService struct {
 	kbService      interfaces.KnowledgeBaseService
 	kbShareService interfaces.KBShareService
 	agentService   interfaces.CustomAgentService
+	userService    interfaces.UserService
+	memberService  interfaces.TenantMemberService
 }
 
 // NewMCPEndpointService creates the workspace MCP endpoint service.
@@ -49,12 +52,16 @@ func NewMCPEndpointService(
 	kbService interfaces.KnowledgeBaseService,
 	kbShareService interfaces.KBShareService,
 	agentService interfaces.CustomAgentService,
+	userService interfaces.UserService,
+	memberService interfaces.TenantMemberService,
 ) interfaces.MCPEndpointService {
 	return &mcpEndpointService{
 		repo:           repo,
 		kbService:      kbService,
 		kbShareService: kbShareService,
 		agentService:   agentService,
+		userService:    userService,
+		memberService:  memberService,
 	}
 }
 
@@ -116,6 +123,7 @@ func (s *mcpEndpointService) Create(
 		TenantID:           tenantID,
 		Name:               name,
 		Description:        strings.TrimSpace(ep.Description),
+		EmployeeBinding:    ep.EmployeeBinding,
 		Enabled:            ep.Enabled,
 		TokenHash:          HashMCPEndpointToken(token),
 		TokenHint:          mcpEndpointTokenHint(token),
@@ -125,6 +133,9 @@ func (s *mcpEndpointService) Create(
 		RateLimitPerMinute: rate,
 	}
 	if err := requireKeyCoversEndpoint(ctx, row); err != nil {
+		return nil, "", err
+	}
+	if err := s.authorizeEmployee(ctx, row); err != nil {
 		return nil, "", err
 	}
 	if err := s.repo.Create(ctx, row); err != nil {
@@ -161,6 +172,14 @@ func (s *mcpEndpointService) Update(
 	if upd.Description != nil {
 		ep.Description = strings.TrimSpace(*upd.Description)
 	}
+	if upd.EmployeeBinding != nil {
+		// Never transfer an already distributed bearer credential to another
+		// employee/account. Create a fresh endpoint instead of reviving the
+		// previous holder's token under a different active identity.
+		if ep.EmployeeBinding == nil || *ep.EmployeeBinding != *upd.EmployeeBinding {
+			return nil, companyidentity.ErrDenied
+		}
+	}
 	if upd.Enabled != nil {
 		ep.Enabled = *upd.Enabled
 	}
@@ -195,6 +214,12 @@ func (s *mcpEndpointService) Update(
 	if err := requireKeyCoversEndpoint(ctx, ep); err != nil {
 		return nil, err
 	}
+	// A disabled employee must still be removable/disabled by an administrator.
+	if ep.Enabled {
+		if err := s.authorizeEmployee(ctx, ep); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.repo.Update(ctx, ep); err != nil {
 		return nil, err
 	}
@@ -216,6 +241,9 @@ func (s *mcpEndpointService) RotateToken(
 		return nil, "", err
 	}
 	if err := requireKeyCoversEndpoint(ctx, ep); err != nil {
+		return nil, "", err
+	}
+	if err := s.authorizeEmployee(ctx, ep); err != nil {
 		return nil, "", err
 	}
 	token, err := generateMCPEndpointToken()
@@ -284,7 +312,67 @@ func (s *mcpEndpointService) Authenticate(
 	if !ep.Enabled {
 		return nil, ErrMCPEndpointDisabled
 	}
+	if err := s.authorizeEmployee(ctx, ep); err != nil {
+		return nil, err
+	}
 	return ep, nil
+}
+
+// authorizeEmployee applies the live directory state and the deployment's
+// approved library scope in addition to the endpoint's own grant. It creates
+// neither employees nor local memberships, and never matches an email/name.
+func (s *mcpEndpointService) authorizeEmployee(ctx context.Context, ep *types.MCPEndpoint) error {
+	if ep.EmployeeBinding == nil {
+		if companyidentity.RequireEmployeeMCP() {
+			return companyidentity.ErrDenied
+		}
+		return nil
+	}
+	checker, err := companyidentity.FromEnv()
+	if err != nil {
+		return err
+	}
+	if err := checker.AuthorizeKnowledgeBases(ep.KnowledgeBaseIDs); err != nil {
+		return err
+	}
+	for _, name := range ep.Tools {
+		def, ok := types.LookupMCPEndpointTool(name)
+		if !ok || def.Destructive || (def.Group != types.MCPEndpointToolGroupRetrieve && def.Group != types.MCPEndpointToolGroupWiki) {
+			return companyidentity.ErrDenied
+		}
+		if name == types.MCPEndpointToolGetOriginalDocument && !checker.OriginalDownloadsAllowed() {
+			return companyidentity.ErrDenied
+		}
+	}
+	if _, err := checker.Check(ctx, *ep.EmployeeBinding); err != nil {
+		return err
+	}
+	if id := ep.EmployeeBinding.WeKnoraUserID; id != "" {
+		if s.userService == nil || s.memberService == nil {
+			return companyidentity.ErrDenied
+		}
+		user, err := s.userService.GetUserByID(ctx, id)
+		if err != nil || user == nil || user.ID != id || !user.IsActive || user.DeletedAt.Valid {
+			return companyidentity.ErrDenied
+		}
+		membership, err := s.memberService.GetMembership(ctx, id, ep.TenantID)
+		if err != nil || membership == nil || membership.UserID != id || membership.TenantID != ep.TenantID ||
+			membership.DeletedAt.Valid || membership.Status != types.TenantMemberStatusActive || !membership.Role.IsValid() {
+			return companyidentity.ErrDenied
+		}
+		caller := types.Caller{TenantID: ep.TenantID, UserID: id, Role: membership.Role}
+		memberCtx := types.WithCaller(ctx, caller)
+		for _, kbID := range ep.KnowledgeBaseIDs {
+			kb, err := s.kbService.GetKnowledgeBaseByIDOnly(ctx, kbID)
+			if err != nil || kb == nil {
+				return companyidentity.ErrDenied
+			}
+			if _, err := access.ResolveKB(memberCtx, access.KBRequest{Caller: caller}, kb, types.OrgRoleViewer, s.kbShareService, nil); err != nil {
+				return companyidentity.ErrDenied
+			}
+		}
+	}
+	return nil
 }
 
 func (s *mcpEndpointService) getOwned(ctx context.Context, tenantID uint64, id string) (*types.MCPEndpoint, error) {

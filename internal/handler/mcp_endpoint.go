@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Tencent/WeKnora/internal/application/service"
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -25,13 +26,14 @@ func NewMCPEndpointHandler(svc interfaces.MCPEndpointService) *MCPEndpointHandle
 }
 
 type mcpEndpointRequest struct {
-	Name               *string   `json:"name"`
-	Description        *string   `json:"description"`
-	Enabled            *bool     `json:"enabled"`
-	KnowledgeBaseIDs   *[]string `json:"knowledge_base_ids"`
-	Tools              *[]string `json:"tools"`
-	DefaultAgentID     *string   `json:"default_agent_id"`
-	RateLimitPerMinute *int      `json:"rate_limit_per_minute"`
+	Name               *string                  `json:"name"`
+	Description        *string                  `json:"description"`
+	EmployeeBinding    *companyidentity.Binding `json:"employee_binding"`
+	Enabled            *bool                    `json:"enabled"`
+	KnowledgeBaseIDs   *[]string                `json:"knowledge_base_ids"`
+	Tools              *[]string                `json:"tools"`
+	DefaultAgentID     *string                  `json:"default_agent_id"`
+	RateLimitPerMinute *int                     `json:"rate_limit_per_minute"`
 }
 
 func stringValue(p *string) string {
@@ -56,9 +58,10 @@ func (h *MCPEndpointHandler) ListToolCatalog(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"groups":        groups,
-			"tools":         types.MCPEndpointToolCatalog(),
-			"default_tools": types.DefaultMCPEndpointTools(),
+			"groups":                    groups,
+			"tools":                     types.MCPEndpointToolCatalog(),
+			"default_tools":             types.DefaultMCPEndpointTools(),
+			"employee_binding_required": companyidentity.RequireEmployeeMCP(),
 		},
 	})
 }
@@ -102,6 +105,7 @@ func (h *MCPEndpointHandler) CreateMCPEndpoint(c *gin.Context) {
 	ep, token, err := h.svc.Create(c.Request.Context(), tenantID, &types.MCPEndpoint{
 		Name:               stringValue(req.Name),
 		Description:        stringValue(req.Description),
+		EmployeeBinding:    req.EmployeeBinding,
 		Enabled:            enabled,
 		KnowledgeBaseIDs:   types.StringArray(kbIDs),
 		Tools:              types.StringArray(tools),
@@ -185,6 +189,7 @@ func (h *MCPEndpointHandler) UpdateMCPEndpoint(c *gin.Context) {
 	ep, err := h.svc.Update(c.Request.Context(), tenantID, id, interfaces.MCPEndpointUpdate{
 		Name:               req.Name,
 		Description:        req.Description,
+		EmployeeBinding:    req.EmployeeBinding,
 		Enabled:            req.Enabled,
 		KnowledgeBaseIDs:   req.KnowledgeBaseIDs,
 		Tools:              req.Tools,
@@ -251,6 +256,7 @@ func mcpEndpointResponse(ep *types.MCPEndpoint, token string) gin.H {
 		"tenant_id":             ep.TenantID,
 		"name":                  ep.Name,
 		"description":           ep.Description,
+		"employee_binding":      ep.EmployeeBinding,
 		"enabled":               ep.Enabled,
 		"token_hint":            ep.TokenHint,
 		"knowledge_base_ids":    []string(ep.KnowledgeBaseIDs),
@@ -270,6 +276,10 @@ func mcpEndpointResponse(ep *types.MCPEndpoint, token string) gin.H {
 
 func writeMCPEndpointMgmtError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, companyidentity.ErrDenied):
+		c.JSON(http.StatusForbidden, gin.H{"error": "employee binding or knowledge scope denied"})
+	case errors.Is(err, companyidentity.ErrUnavailable):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "employee verification unavailable"})
 	case errors.Is(err, service.ErrMCPEndpointNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "mcp endpoint not found"})
 	default:

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Tencent/WeKnora/internal/application/service"
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/gin-gonic/gin"
@@ -126,5 +127,30 @@ func TestMCPEndpointAuthRejectsBadTokens(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("disabled endpoint: status %d, want 403", w.Code)
+	}
+}
+
+func TestEmployeeMCPRevalidationRejectsTokenRotationWithinRequest(t *testing.T) {
+	ep := &types.MCPEndpoint{ID: "ep-1", TenantID: 42, Enabled: true,
+		EmployeeBinding: &companyidentity.Binding{Issuer: "https://auth.ch-chip.com", Subject: "employee"}}
+	svc := &fakeMCPEndpointService{ep: ep, token: "mcp_first"}
+	r := gin.New()
+	r.ContextWithFallback = true
+	r.POST("/mcp/:endpoint_id", MCPEndpointAuth(svc, &fakeTenantService{tenant: &types.Tenant{ID: 42, Status: "active"}}), func(c *gin.Context) {
+		if err := companyidentity.Revalidate(c.Request.Context()); err != nil {
+			t.Fatal(err)
+		}
+		svc.token = "mcp_rotated"
+		if err := companyidentity.Revalidate(c.Request.Context()); err == nil {
+			t.Fatal("tool revalidation accepted a token rotated after HTTP authentication")
+		}
+		c.Status(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp/ep-1", nil)
+	req.Header.Set("Authorization", "Bearer mcp_first")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status=%d", w.Code)
 	}
 }

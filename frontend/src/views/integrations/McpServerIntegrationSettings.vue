@@ -126,6 +126,13 @@
             <label class="form-label">{{ $t('integrations.mcpserver.descriptionLabel') }}</label>
             <t-textarea v-model="form.description" :autosize="{ minRows: 2, maxRows: 4 }" :placeholder="$t('integrations.mcpserver.descriptionPlaceholder')" />
           </div>
+          <div v-if="editing?.employee_binding" class="form-item">
+            <label class="form-label">{{ $t('integrations.mcpserver.employeeBindingLabel') }}</label>
+            <p class="form-desc">{{ editing.employee_binding.issuer }} · {{ editing.employee_binding.sub }}</p>
+            <p class="form-desc">{{ $t('integrations.mcpserver.employeeBindingHint') }}</p>
+          </div>
+          <t-alert v-else-if="catalog.employee_binding_required" theme="info"
+            :message="$t('integrations.mcpserver.employeeEnrollmentHint')" />
           <div class="form-item enable-row">
             <label class="form-label form-label--inline">{{ $t('integrations.mcpserver.enabledLabel') }}</label>
             <t-switch v-model="form.enabled" size="small" />

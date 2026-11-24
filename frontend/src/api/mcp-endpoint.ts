@@ -7,6 +7,7 @@ export interface McpEndpoint {
   tenant_id: number
   name: string
   description: string
+  employee_binding?: { issuer: string; sub: string; weknora_user_id?: string } | null
   enabled: boolean
   token_hint: string
   knowledge_base_ids: string[]
@@ -32,11 +33,13 @@ export interface McpEndpointToolCatalog {
   groups: McpEndpointToolGroup[]
   tools: McpEndpointToolDefinition[]
   default_tools: string[]
+  employee_binding_required?: boolean
 }
 
 export interface McpEndpointPayload {
   name?: string
   description?: string
+  employee_binding?: { issuer: string; sub: string; weknora_user_id?: string }
   enabled?: boolean
   knowledge_base_ids?: string[]
   tools?: string[]

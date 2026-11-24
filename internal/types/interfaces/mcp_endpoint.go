@@ -3,6 +3,7 @@ package interfaces
 import (
 	"context"
 
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
@@ -22,6 +23,7 @@ type MCPEndpointRepository interface {
 type MCPEndpointUpdate struct {
 	Name               *string
 	Description        *string
+	EmployeeBinding    *companyidentity.Binding
 	Enabled            *bool
 	KnowledgeBaseIDs   *[]string
 	Tools              *[]string

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -23,7 +24,10 @@ type MCPEndpoint struct {
 	TenantID    uint64 `json:"tenant_id"   gorm:"not null;index:idx_mcp_endpoints_tenant"`
 	Name        string `json:"name"        gorm:"type:varchar(255);not null;default:''"`
 	Description string `json:"description" gorm:"type:text;not null;default:''"`
-	Enabled     bool   `json:"enabled"     gorm:"not null;default:true"`
+	// EmployeeBinding ties a distributed credential to a live company subject.
+	// Nil preserves legacy machine endpoints unless employee mode is required.
+	EmployeeBinding *companyidentity.Binding `json:"employee_binding,omitempty" gorm:"type:jsonb"`
+	Enabled         bool                     `json:"enabled"     gorm:"not null;default:true"`
 	// TokenHash is the SHA-256 hex digest of the bearer token. The plaintext
 	// is shown once on create/rotate and never stored, mirroring
 	// TenantAPIKey.KeyHash rather than the plaintext embed publish token.

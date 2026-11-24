@@ -19,18 +19,19 @@ const (
 // They intentionally differ from the agent-internal tool names where the
 // external contract is simpler (one query, server-side session handling).
 const (
-	MCPEndpointToolListKnowledgeBases = "list_knowledge_bases"
-	MCPEndpointToolSearchKnowledge    = "search_knowledge"
-	MCPEndpointToolGrepChunks         = "grep_chunks"
-	MCPEndpointToolListDocuments      = "list_documents"
-	MCPEndpointToolReadDocument       = "read_document"
-	MCPEndpointToolAsk                = "ask"
-	MCPEndpointToolWikiSearch         = "wiki_search"
-	MCPEndpointToolWikiReadPage       = "wiki_read_page"
-	MCPEndpointToolWikiIndex          = "wiki_index"
-	MCPEndpointToolAddDocument        = "add_document"
-	MCPEndpointToolUpdateDocument     = "update_document"
-	MCPEndpointToolDeleteDocument     = "delete_document"
+	MCPEndpointToolListKnowledgeBases  = "list_knowledge_bases"
+	MCPEndpointToolSearchKnowledge     = "search_knowledge"
+	MCPEndpointToolGrepChunks          = "grep_chunks"
+	MCPEndpointToolListDocuments       = "list_documents"
+	MCPEndpointToolReadDocument        = "read_document"
+	MCPEndpointToolGetOriginalDocument = "get_original_document"
+	MCPEndpointToolAsk                 = "ask"
+	MCPEndpointToolWikiSearch          = "wiki_search"
+	MCPEndpointToolWikiReadPage        = "wiki_read_page"
+	MCPEndpointToolWikiIndex           = "wiki_index"
+	MCPEndpointToolAddDocument         = "add_document"
+	MCPEndpointToolUpdateDocument      = "update_document"
+	MCPEndpointToolDeleteDocument      = "delete_document"
 )
 
 // MCPEndpointToolDefinition is the settings-facing description of one tool.
@@ -51,6 +52,7 @@ var mcpEndpointToolCatalog = []MCPEndpointToolDefinition{
 	{Name: MCPEndpointToolGrepChunks, Group: MCPEndpointToolGroupRetrieve},
 	{Name: MCPEndpointToolListDocuments, Group: MCPEndpointToolGroupRetrieve},
 	{Name: MCPEndpointToolReadDocument, Group: MCPEndpointToolGroupRetrieve},
+	{Name: MCPEndpointToolGetOriginalDocument, Group: MCPEndpointToolGroupRetrieve},
 	{Name: MCPEndpointToolAsk, Group: MCPEndpointToolGroupChat},
 	{Name: MCPEndpointToolWikiSearch, Group: MCPEndpointToolGroupWiki},
 	{Name: MCPEndpointToolWikiReadPage, Group: MCPEndpointToolGroupWiki},
@@ -82,7 +84,7 @@ func MCPEndpointToolGroups() []MCPEndpointToolGroup {
 func DefaultMCPEndpointTools() []string {
 	out := make([]string, 0, len(mcpEndpointToolCatalog))
 	for _, def := range mcpEndpointToolCatalog {
-		if !def.Destructive {
+		if !def.Destructive && def.Name != MCPEndpointToolGetOriginalDocument {
 			out = append(out, def.Name)
 		}
 	}
