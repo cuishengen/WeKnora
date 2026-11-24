@@ -1123,6 +1123,9 @@ func (t *SearchKnowledgeTool) formatOutput(
 			"query_type":          result.QueryType,
 			"knowledge_base_type": result.KnowledgeBaseType,
 		}
+		if !isFAQ && result.KnowledgeFilename != "" {
+			row["original_download"] = "/platform/source-download/" + result.KnowledgeID
+		}
 		if images := chunkImageList(result.ImageInfo); len(images) > 0 {
 			row["images"] = images
 		}

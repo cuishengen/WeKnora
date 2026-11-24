@@ -152,8 +152,8 @@ func (c *LongPollClient) poll(ctx context.Context) error {
 		return ErrTokenExpired
 	}
 
-	if result.Ret != 0 && result.ErrCode != 0 {
-		return fmt.Errorf("getupdates error: ret=%d errcode=%d msg=%s", result.Ret, result.ErrCode, result.ErrMsg)
+	if result.Ret != 0 || result.ErrCode != 0 {
+		return fmt.Errorf("getupdates error: ret=%d errcode=%d", result.Ret, result.ErrCode)
 	}
 
 	// Update cursor for next poll
@@ -185,7 +185,8 @@ func (c *LongPollClient) parseMessage(msg *weixinMessage) *im.IncomingMessage {
 	contextToken := msg.ContextToken
 
 	// Only process user messages (message_type=1), skip bot messages (message_type=2)
-	if msg.MessageType == 2 {
+	if msg.MessageType != 1 || msg.FromUserID == "" || msg.GroupID != "" ||
+		(c.ilinkBotID != "" && msg.ToUserID != c.ilinkBotID) {
 		return nil
 	}
 
@@ -335,6 +336,7 @@ type weixinMessage struct {
 	ClientID     string        `json:"client_id"`
 	CreateTimeMs int64         `json:"create_time_ms"`
 	SessionID    string        `json:"session_id"`
+	GroupID      string        `json:"group_id"`
 	MessageType  int           `json:"message_type"`  // 1=USER, 2=BOT
 	MessageState int           `json:"message_state"` // 0=NEW, 1=GENERATING, 2=FINISH
 	ItemList     []messageItem `json:"item_list"`

@@ -19,6 +19,7 @@ var (
 	_ im.Adapter        = (*WSAdapter)(nil)
 	_ im.StreamSender   = (*WSAdapter)(nil)
 	_ im.FileDownloader = (*WSAdapter)(nil)
+	_ im.FileSender     = (*WSAdapter)(nil)
 )
 
 // WSAdapter implements im.Adapter and im.StreamSender for WeCom in WebSocket
@@ -52,6 +53,12 @@ func (a *WSAdapter) HandleURLVerification(c *gin.Context) bool {
 
 func (a *WSAdapter) SendReply(ctx context.Context, incoming *im.IncomingMessage, reply *im.ReplyMessage) error {
 	return a.client.SendReply(ctx, incoming, reply)
+}
+
+func (a *WSAdapter) MaxFileSize() int64 { return maxOutboundFileBytes }
+
+func (a *WSAdapter) SendFile(ctx context.Context, incoming *im.IncomingMessage, filename string, content []byte) error {
+	return a.client.SendFile(ctx, incoming, filename, content)
 }
 
 // ── StreamSender implementation ──

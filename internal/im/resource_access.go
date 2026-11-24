@@ -38,14 +38,15 @@ func (s *Service) authorizeOutboundResource(
 	if owner == 0 {
 		return access.ErrForbidden
 	}
-	if owner == tenant.ID {
+	_, companyEmployee := ctx.Value(companyIMContextKey{}).(companyIMSubject)
+	if owner == tenant.ID && !companyEmployee {
 		return secutils.ValidateStoragePathTenant(physical, owner)
 	}
 	bindings, ok := s.resourceCatalog.(interface {
 		interfaces.KBResourceLookup
 		interfaces.MessageFileBindingLookup
 	})
-	if !ok || s.kbService == nil || s.kbShareService == nil {
+	if !ok || s.kbService == nil || owner != tenant.ID && s.kbShareService == nil {
 		return access.ErrForbidden
 	}
 	origins, err := bindings.GetMessageFileBindings(ctx, owner, reference, "")

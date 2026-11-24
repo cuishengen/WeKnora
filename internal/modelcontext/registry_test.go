@@ -64,6 +64,28 @@ func TestSourceDownloadLinkSurvivesStructuredRetrieval(t *testing.T) {
 	require.Equal(t, "[下载]("+link+")", registry.DecodeOutputText("[下载](res://0001)"))
 }
 
+func TestOriginalDownloadIsPreservedThroughAllDocumentToolViews(t *testing.T) {
+	const id = "36283d3d-a495-40d2-a13f-e925fc322996"
+	const link = "/platform/source-download/" + id
+	for _, test := range []struct {
+		name string
+		data map[string]interface{}
+	}{
+		{"list_documents", map[string]interface{}{"display_type": "document_info", "documents": []map[string]interface{}{{"knowledge_id": id, "title": "sdk.zip", "original_download": link}}}},
+		{"read_document", map[string]interface{}{"display_type": "knowledge_chunks_list", "knowledge_id": id, "knowledge_title": "datasheet.pdf", "document": map[string]interface{}{"knowledge_id": id, "original_download": link}, "chunks": []map[string]interface{}{}}},
+		{"search_knowledge", map[string]interface{}{"display_type": "search_results", "results": []map[string]interface{}{{"id": "chunk-1", "knowledge_id": id, "knowledge_base_id": "vendor", "content": "original evidence", "original_download": link}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := NewRegistry(true)
+			output := registry.ModelToolResultForTool(test.name, &types.ToolResult{Success: true, Data: test.data})
+			require.Contains(t, output, "<original_download>res://0001</original_download>")
+			require.NotContains(t, output, "/platform/source-download/doc://")
+			require.NotContains(t, output, id)
+			require.Equal(t, "[original]("+link+")", registry.DecodeOutputText("[original](res://0001)"))
+		})
+	}
+}
+
 func TestOutputFilesAreRenderedOnlyForLiveModelResults(t *testing.T) {
 	result := &types.ToolResult{Success: true, Output: "generated", OutputFiles: []string{"sandbox:比赛信息.pptx"}}
 	registry := NewRegistry(true)

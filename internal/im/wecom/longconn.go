@@ -65,12 +65,13 @@ type wsFrame struct {
 // Supports text, image, file, voice, and mixed message types.
 // Reference: https://developer.work.weixin.qq.com/document/path/100719
 type botMessage struct {
-	MsgID      string `json:"msgid"`
-	AiBotID    string `json:"aibotid"`
-	ChatID     string `json:"chatid"`
-	ChatType   string `json:"chattype"` // "single" or "group"
-	MsgType    string `json:"msgtype"`  // "text", "image", "file", "voice", "video", "mixed", "stream"
-	CreateTime int64  `json:"create_time"`
+	MsgID      string          `json:"msgid"`
+	AiBotID    string          `json:"aibotid"`
+	ChatID     string          `json:"chatid"`
+	ChatType   string          `json:"chattype"` // "single" or "group"
+	MsgType    string          `json:"msgtype"`  // "text", "image", "file", "voice", "video", "mixed", "stream"
+	CreateTime int64           `json:"create_time"`
+	CompatInfo json.RawMessage `json:"compat_info"`
 	From       struct {
 		UserID string `json:"userid"`
 	} `json:"from"`
@@ -138,6 +139,8 @@ type LongConnClient struct {
 	mu     sync.Mutex
 	closed atomic.Bool
 	reqSeq atomic.Int64
+	ackMu  sync.Mutex
+	acks   map[string]chan wsFrame
 
 	// streamBufs tracks accumulated content per stream ID.
 	// WeCom stream protocol is replace-based: each frame's content replaces
@@ -427,7 +430,7 @@ func (c *LongConnClient) connectAndRun(ctx context.Context) error {
 			// Detach from connection ctx so in-flight messages survive reconnects.
 			go c.handleCallback(context.WithoutCancel(ctx), conn, frame)
 		default:
-			// pong or other control frames — ignore
+			c.receiveAck(frame)
 		}
 	}
 }
@@ -508,10 +511,17 @@ func (c *LongConnClient) handleCallback(ctx context.Context, conn *ws.Conn, fram
 		logger.Warnf(ctx, "[WeCom] Failed to unmarshal callback body: %v", err)
 		return
 	}
+	if c.botID != "" && msg.AiBotID != c.botID {
+		logger.Warnf(ctx, "[WeCom] Ignoring callback for a different robot")
+		return
+	}
+	if len(msg.CompatInfo) != 0 && string(msg.CompatInfo) != "null" {
+		logger.Warnf(ctx, "[WeCom] Ignoring callback outside an ordinary member conversation")
+		return
+	}
 
-	logger.Debugf(ctx, "[WeCom] Parsed message: msgid=%s msgtype=%s from=%s chattype=%s text=%q image_url=%q file_url=%q voice=%q mixed_items=%d",
-		msg.MsgID, msg.MsgType, msg.From.UserID, msg.ChatType,
-		msg.Text.Content, msg.Image.URL, msg.File.URL, msg.Voice.Content, len(msg.Mixed.MsgItem))
+	logger.Debugf(ctx, "[WeCom] Parsed callback: msgtype=%s chattype=%s mixed_items=%d",
+		msg.MsgType, msg.ChatType, len(msg.Mixed.MsgItem))
 
 	// Handle server-side events (e.g. disconnected_event) before normal messages.
 	if msg.MsgType == "event" {

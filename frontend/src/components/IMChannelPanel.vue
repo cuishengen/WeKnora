@@ -549,10 +549,18 @@
                 </t-button>
               </div>
 
+              <div v-if="formData.credentials.bot_token" class="form-item">
+                <label class="form-label">员工身份发行方（issuer）</label>
+                <t-input v-model="formData.credentials.employee_issuer" placeholder="从员工门户复制 issuer" />
+                <label class="form-label">绑定员工标识（sub）</label>
+                <t-input v-model="formData.credentials.employee_subject" placeholder="从该员工的门户复制稳定身份标识" />
+                <p class="form-desc">微信扫码绑定与员工授权分别校验。仅将已确认的扫码用户绑定到对应员工；未绑定时无法查询公司资料。</p>
+              </div>
+
               <!-- QR code binding flow -->
               <div v-else class="wechat-qr-section">
                 <!-- Initial state: show bind button -->
-                <div v-if="!wechatQRImgUrl" class="wechat-bind-action">
+                <div v-if="!wechatQRContent" class="wechat-bind-action">
                   <t-button theme="default" variant="outline" :loading="wechatLoading" @click="startWeChatBinding">
                     <template #icon><t-icon name="scan" /></template>
                     {{ $t('agentEditor.im.wechatScanBind') }}
@@ -562,7 +570,7 @@
                 <!-- QR code displayed -->
                 <div v-else class="wechat-qr-display">
                   <div class="qr-container">
-                    <img :src="wechatQRImgUrl" alt="WeChat QR Code" class="qr-image" />
+                    <t-qrcode :value="wechatQRContent" :size="200" type="svg" class="qr-image" />
                     <div v-if="wechatQRStatus === 'expired'" class="qr-expired-overlay" @click="startWeChatBinding">
                       <t-icon name="refresh" class="refresh-icon" />
                       <span>{{ $t('agentEditor.im.wechatQRExpired') }}</span>
@@ -732,7 +740,6 @@ const knowledgeBases = ref<{ id: string; name: string }[]>([]);
 
 // WeChat QR code binding state
 const wechatQRContent = ref('');  // raw text to encode as QR code
-const wechatQRImgUrl = ref('');   // generated QR image URL
 const wechatQRCode = ref('');     // opaque token for polling status
 const wechatQRStatus = ref<string>('');
 const wechatLoading = ref(false);
@@ -831,7 +838,6 @@ function onPlatformChange(val: string | number | boolean) {
   formData.value.credentials = defaultCredentials();
   stopWeChatPolling();
   wechatQRContent.value = '';
-  wechatQRImgUrl.value = '';
   wechatQRCode.value = '';
   wechatQRStatus.value = '';
   // WeChat uses fixed mode/output
@@ -870,7 +876,6 @@ async function startWeChatBinding() {
   stopWeChatPolling();
   wechatLoading.value = true;
   wechatQRContent.value = '';
-  wechatQRImgUrl.value = '';
   wechatQRStatus.value = '';
 
   try {
@@ -879,9 +884,6 @@ async function startWeChatBinding() {
     wechatQRContent.value = res.data.qrcode_url;
     wechatQRCode.value = res.data.qrcode;
     wechatQRStatus.value = 'wait';
-
-    // Generate QR code image via public API (no extra npm dependency needed)
-    wechatQRImgUrl.value = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(res.data.qrcode_url)}`;
 
     // Start long-polling for scan status
     startStatusPolling();
@@ -912,7 +914,6 @@ async function pollOnce() {
       };
       stopWeChatPolling();
       wechatQRContent.value = '';
-      wechatQRImgUrl.value = '';
       MessagePlugin.success(t('agentEditor.im.wechatBindSuccess'));
       return;
     }
@@ -1019,7 +1020,6 @@ function resetForm() {
   channelNameTouched.value = false;
   stopWeChatPolling();
   wechatQRContent.value = '';
-  wechatQRImgUrl.value = '';
   wechatQRCode.value = '';
   wechatQRStatus.value = '';
   formData.value = {

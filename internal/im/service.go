@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	agenttools "github.com/Tencent/WeKnora/internal/agent/tools"
+	"github.com/Tencent/WeKnora/internal/companyidentity"
 	"github.com/Tencent/WeKnora/internal/config"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/event"
@@ -189,6 +190,7 @@ func cleanIMContent(ctx context.Context, content string, resolver *storageurl.Fi
 		resolver.WithContext(ctx)
 	}
 	content = rewriteStorageURLs(ctx, content, resolver)
+	content = rewriteCompanyOriginalLinks(ctx, content)
 	return content
 }
 
@@ -302,11 +304,13 @@ type inflightEntry struct {
 // 4. Calls the WeKnora QA pipeline for normal messages
 // 5. Collects the streaming answer and sends it back via the Adapter
 type Service struct {
-	db             *gorm.DB
-	sessionService interfaces.SessionService
-	messageService interfaces.MessageService
-	tenantService  interfaces.TenantService
-	agentService   interfaces.CustomAgentService
+	employeeChecker     employeeChecker
+	companyDownloadBase string
+	db                  *gorm.DB
+	sessionService      interfaces.SessionService
+	messageService      interfaces.MessageService
+	tenantService       interfaces.TenantService
+	agentService        interfaces.CustomAgentService
 
 	// knowledgeService is used for saving IM file messages to knowledge bases.
 	knowledgeService interfaces.KnowledgeService
@@ -914,6 +918,10 @@ func NewService(
 		instanceID:       instanceID,
 		stopCh:           make(chan struct{}),
 	}
+	if checker, err := companyidentity.FromEnv(); err == nil {
+		s.employeeChecker = checker
+	}
+	s.companyDownloadBase = companyDownloadBase(os.Getenv("COMPANY_IM_DOWNLOAD_BASE_URL"))
 
 	// Initialize the QA worker pool and bounded queue.
 	s.qaQueue = newQAQueue(workers, maxQueue, maxPerUser, globalMaxWorkers, s.executeQARequest, redisClient)
@@ -1793,10 +1801,14 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, chann
 		return fmt.Errorf("get tenant: %w", err)
 	}
 	sessionCtx := context.WithValue(ctx, types.TenantInfoContextKey, tenant)
-	sessionCtx = withIMIdentity(sessionCtx, channel, msg)
+	sessionCtx, err = s.authorizeIMIdentity(sessionCtx, channel, msg)
+	if err != nil {
+		_ = adapter.SendReply(ctx, msg, &ReplyMessage{Content: "请使用已获授权的员工身份单聊知识助手；尚未绑定或权限已失效时，请联系管理员。", IsFinal: true})
+		return nil
+	}
 
 	// 2. Resolve or create a WeKnora session
-	channelSession, err := s.resolveSession(sessionCtx, msg, tenantID, agentID, channelID, channel.SessionMode)
+	channelSession, err := s.resolveSession(sessionCtx, imSessionMessage(sessionCtx, channelID, msg), tenantID, agentID, channelID, channel.SessionMode)
 	if err != nil {
 		return fmt.Errorf("resolve session: %w", err)
 	}
@@ -1811,6 +1823,7 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, chann
 			customAgent = agent
 		}
 	}
+	customAgent = companyIMAgent(sessionCtx, customAgent)
 
 	// ── Slash-command dispatch ──
 	// Commands are handled before the QA pipeline so they respond instantly.
@@ -1840,7 +1853,7 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, chann
 			if delErr := s.db.Delete(&ChannelSession{}, "id = ?", channelSession.ID).Error; delErr != nil {
 				logger.Warnf(ctx, "[IM] Failed to delete stale channel session %s: %v", channelSession.ID, delErr)
 			}
-			channelSession, err = s.resolveSession(sessionCtx, msg, tenantID, agentID, channelID, channel.SessionMode)
+			channelSession, err = s.resolveSession(sessionCtx, imSessionMessage(sessionCtx, channelID, msg), tenantID, agentID, channelID, channel.SessionMode)
 			if err != nil {
 				return fmt.Errorf("resolve session (retry): %w", err)
 			}
@@ -1956,6 +1969,13 @@ func (s *Service) persistIMLastRequestState(ctx context.Context, sessionID, agen
 func (s *Service) executeQARequest(req *qaRequest) {
 	ctx := req.ctx
 	defer req.cancel()
+	if isCompanyIM(req.channel) {
+		var err error
+		ctx, err = s.authorizeIMIdentity(ctx, req.channel, req.msg)
+		if err != nil {
+			return
+		}
+	}
 
 	// Track in-flight request so /stop can cancel it.
 	entry := &inflightEntry{cancel: req.cancel}
@@ -1982,14 +2002,14 @@ func (s *Service) executeQARequest(req *qaRequest) {
 		}
 		return
 	}
-	if req.channel.KnowledgeBaseID != "" && downloaded != nil {
+	if !isCompanyIM(req.channel) && req.channel.KnowledgeBaseID != "" && downloaded != nil {
 		go s.processDownloadedFileToKnowledgeBase(
 			context.WithoutCancel(ctx), req.channel, downloaded,
 		)
 	}
 
 	// Determine output mode from channel config.
-	streamDisabled := req.channel.OutputMode == "full"
+	streamDisabled := req.channel.OutputMode == "full" || isCompanyIM(req.channel)
 
 	if streamDisabled {
 		if progressSender, ok := req.adapter.(FullOutputProgressSender); ok &&
@@ -2024,6 +2044,11 @@ func (s *Service) executeQARequest(req *qaRequest) {
 	}
 
 	outCtx := imOutboundContext(ctx)
+	authorizedCtx, authErr := s.authorizeIMAnswer(outCtx, req.msg)
+	if authErr != nil {
+		return
+	}
+	outCtx = authorizedCtx
 	reply := &ReplyMessage{
 		Content: formatIMOutboundAnswerOrFallback(outCtx, answer,
 			s.newOutboundFileServiceResolver(req.tenant, req.agent, kbIDs)),
@@ -2032,6 +2057,9 @@ func (s *Service) executeQARequest(req *qaRequest) {
 	if err := req.adapter.SendReply(outCtx, req.msg, reply); err != nil {
 		logger.Errorf(ctx, "[IM] Send reply failed: %v", err)
 		return
+	}
+	if err == nil {
+		s.sendOriginalFiles(outCtx, req.msg, req.adapter, req.agent, kbIDs, answer)
 	}
 
 	logger.Infof(ctx, "[IM] Reply sent: channel=%s platform=%s user=%s answer_len=%d",
@@ -2074,6 +2102,13 @@ func (s *Service) handleMessageFullOutput(
 	// QA (and /stop) may have cancelled ctx. Platform updates must still run so
 	// the thinking card is replaced instead of hanging forever.
 	outCtx := imOutboundContext(ctx)
+	authorizedCtx, authErr := s.authorizeIMAnswer(outCtx, msg)
+	if authErr != nil {
+		_ = streamer.FinalizeStream(outCtx, msg, streamID, "员工授权已失效，请联系管理员。")
+		_ = streamer.EndStream(outCtx, msg, streamID)
+		return authErr
+	}
+	outCtx = authorizedCtx
 	finalContent := formatIMOutboundAnswerOrFallback(outCtx, answer,
 		s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs))
 
@@ -2097,6 +2132,9 @@ func (s *Service) handleMessageFullOutput(
 	}
 
 	if finalizeErr == nil || fallbackErr == nil {
+		if qaErr == nil {
+			s.sendOriginalFiles(outCtx, msg, adapter, customAgent, kbIDs, answer)
+		}
 		logger.Infof(
 			ctx, "[IM] Full-output reply sent: platform=%s user=%s answer_len=%d",
 			msg.Platform, msg.UserID, len(answer),
@@ -2827,6 +2865,7 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		}
 		var err error
 		req := buildIMQARequest(session, msg.Content, assistantMsg.ID, userMsg.ID, customAgent, kbIDs, msg.Quote, attachments)
+		_, req.SharedAgentReadOnly = qaCtx.Value(companyIMContextKey{}).(companyIMSubject)
 		req.ImageURLs = imageURLs
 		if req.QuotedContext != "" {
 			logger.Debugf(qaCtx, "[IM] QuotedContext set: length=%d", len(req.QuotedContext))
@@ -2959,6 +2998,9 @@ loop:
 		return errors.Join(finalizeErr, endErr, fallbackErr)
 	}
 	logger.Infof(ctx, "[IM] Stream reply sent: platform=%s user=%s answer_len=%d", msg.Platform, msg.UserID, len(answer))
+	if finalErr == nil {
+		s.sendOriginalFiles(outCtx, msg, adapter, customAgent, kbIDs, answer)
+	}
 	return endErr
 }
 
@@ -2971,11 +3013,19 @@ func (s *Service) fallbackNonStream(ctx context.Context, msg *IncomingMessage, s
 	}
 
 	outCtx := imOutboundContext(ctx)
-	return adapter.SendReply(outCtx, msg, &ReplyMessage{
+	outCtx, authErr := s.authorizeIMAnswer(outCtx, msg)
+	if authErr != nil {
+		return authErr
+	}
+	sendErr := adapter.SendReply(outCtx, msg, &ReplyMessage{
 		Content: formatIMOutboundAnswerOrFallback(outCtx, answer,
 			s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs)),
 		IsFinal: true,
 	})
+	if err == nil && sendErr == nil {
+		s.sendOriginalFiles(outCtx, msg, adapter, customAgent, kbIDs, answer)
+	}
+	return sendErr
 }
 
 // runQA executes the WeKnora QA pipeline and returns the full answer text.
@@ -3112,6 +3162,7 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 		}
 		var err error
 		req := buildIMQARequest(session, query, assistantMsg.ID, userMsg.ID, customAgent, kbIDs, quote, attachments)
+		_, req.SharedAgentReadOnly = ctx.Value(companyIMContextKey{}).(companyIMSubject)
 		req.ImageURLs = imageURLs
 		if req.QuotedContext != "" {
 			logger.Debugf(ctx, "[IM] QuotedContext set: length=%d", len(req.QuotedContext))

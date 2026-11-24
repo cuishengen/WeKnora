@@ -180,3 +180,11 @@ type FileDownloader interface {
 	// Returns the file content reader, the resolved file name, and any error.
 	DownloadFile(ctx context.Context, msg *IncomingMessage) (io.ReadCloser, string, error)
 }
+
+// FileSender sends an already-authorized original as a native attachment.
+// A nil error means the platform acknowledged the upload and send operation;
+// it does not mean that the recipient has opened the file.
+type FileSender interface {
+	MaxFileSize() int64
+	SendFile(ctx context.Context, incoming *IncomingMessage, filename string, content []byte) error
+}

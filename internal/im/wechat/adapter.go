@@ -122,7 +122,7 @@ func (a *Adapter) SendReply(ctx context.Context, incoming *im.IncomingMessage, r
 		"base_info": newBaseInfo(),
 	}
 
-	return a.ilinkPost(ctx, "/ilink/bot/sendmessage", payload)
+	return a.ilinkPost(ctx, "/ilink/bot/sendmessage", payload, nil)
 }
 
 // SendTyping sends a typing indicator to the user.
@@ -140,7 +140,7 @@ func (a *Adapter) SendTyping(ctx context.Context, incoming *im.IncomingMessage) 
 		"base_info":     newBaseInfo(),
 	}
 
-	return a.ilinkPost(ctx, "/ilink/bot/sendtyping", payload)
+	return a.ilinkPost(ctx, "/ilink/bot/sendtyping", payload, nil)
 }
 
 // DownloadFile downloads a media file from the iLink CDN.
@@ -278,7 +278,7 @@ func hexDecode(s string) ([]byte, error) {
 }
 
 // ilinkPost sends a POST request to the iLink API with authentication headers.
-func (a *Adapter) ilinkPost(ctx context.Context, path string, payload interface{}) error {
+func (a *Adapter) ilinkPost(ctx context.Context, path string, payload interface{}, result interface{}) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
@@ -297,10 +297,26 @@ func (a *Adapter) ilinkPost(ctx context.Context, path string, payload interface{
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10+1))
+	if err != nil || len(respBody) > 64<<10 {
+		return fmt.Errorf("invalid iLink acknowledgement")
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ilink api %s returned status %d: %s", path, resp.StatusCode, string(respBody))
+		return fmt.Errorf("ilink api %s returned status %d", path, resp.StatusCode)
+	}
+	var status struct {
+		Ret     int `json:"ret"`
+		ErrCode int `json:"errcode"`
+	}
+	if json.Unmarshal(respBody, &status) != nil {
+		return fmt.Errorf("invalid iLink acknowledgement")
+	}
+	if status.Ret != 0 || status.ErrCode != 0 {
+		return fmt.Errorf("iLink rejected request (ret %d, code %d)", status.Ret, status.ErrCode)
+	}
+	if result != nil {
+		return json.Unmarshal(respBody, result)
 	}
 
 	return nil

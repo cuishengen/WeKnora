@@ -529,6 +529,9 @@ func documentInfo(knowledge *types.Knowledge, total int64) map[string]interface{
 		"parse_status": knowledge.ParseStatus,
 		"chunk_count":  total,
 	}
+	if knowledge.FileName != "" || knowledge.IsManual() || knowledge.SourceReference != nil {
+		info["original_download"] = "/platform/source-download/" + knowledge.ID
+	}
 	if knowledge.Description != "" {
 		info["description"] = knowledge.Description
 	}

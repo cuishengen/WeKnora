@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -178,6 +179,7 @@ func (r *sourceRegistry) modelDocumentInfoOutput(data map[string]interface{}, fa
 			fmt.Fprintf(&b, " updated_at=\"%s\"", escapeAttr(updated[:10]))
 		}
 		b.WriteString(">\n")
+		writeOriginalDownload(&b, row, knowledgeID)
 		if description := stringValue(row, "description"); description != "" {
 			fmt.Fprintf(&b, "    <description>%s</description>\n", escapeText(description))
 		}
@@ -192,24 +194,25 @@ func (r *sourceRegistry) modelDocumentInfoOutput(data map[string]interface{}, fa
 }
 
 type modelChunk struct {
-	handle     string
-	docHandle  string
-	kbHandle   string
-	title      string
-	metadata   string
-	chunkType  string
-	index      int
-	view       string
-	role       string
-	match      string
-	content    string
-	question   string
-	answers    []string
-	images     []map[string]interface{}
-	docRealID  string
-	kbRealID   string
-	chunkReal  string
-	inputOrder int
+	handle           string
+	docHandle        string
+	kbHandle         string
+	title            string
+	metadata         string
+	originalDownload string
+	chunkType        string
+	index            int
+	view             string
+	role             string
+	match            string
+	content          string
+	question         string
+	answers          []string
+	images           []map[string]interface{}
+	docRealID        string
+	kbRealID         string
+	chunkReal        string
+	inputOrder       int
 }
 
 func (r *sourceRegistry) modelKnowledgeOutput(mode string, rows []map[string]interface{}, fallback string) string {
@@ -249,24 +252,25 @@ func (r *sourceRegistry) modelChunksFromRows(mode string, rows []map[string]inte
 			ChunkType:       chunkType,
 		})
 		chunks = append(chunks, modelChunk{
-			handle:     chunkHandle,
-			docHandle:  r.RegisterDocument(knowledgeID),
-			kbHandle:   r.RegisterKnowledgeBase(kbID),
-			title:      title,
-			metadata:   stringValue(row, "knowledge_metadata"),
-			chunkType:  chunkType,
-			index:      chunkIndex,
-			view:       viewForRow(row, mode),
-			role:       stringValue(row, "role"),
-			match:      firstNonEmpty(stringValue(row, "match_snippet"), stringValue(row, "matched_content")),
-			content:    stringValue(row, "content"),
-			question:   firstNonEmpty(stringValue(row, "faq_question"), stringValue(row, "faq_standard_question")),
-			answers:    stringSliceValue(row["faq_answers"]),
-			images:     mapsValue(row["images"]),
-			docRealID:  knowledgeID,
-			kbRealID:   kbID,
-			chunkReal:  chunkID,
-			inputOrder: idx,
+			handle:           chunkHandle,
+			docHandle:        r.RegisterDocument(knowledgeID),
+			kbHandle:         r.RegisterKnowledgeBase(kbID),
+			title:            title,
+			metadata:         stringValue(row, "knowledge_metadata"),
+			originalDownload: stringValue(row, "original_download"),
+			chunkType:        chunkType,
+			index:            chunkIndex,
+			view:             viewForRow(row, mode),
+			role:             stringValue(row, "role"),
+			match:            firstNonEmpty(stringValue(row, "match_snippet"), stringValue(row, "matched_content")),
+			content:          stringValue(row, "content"),
+			question:         firstNonEmpty(stringValue(row, "faq_question"), stringValue(row, "faq_standard_question")),
+			answers:          stringSliceValue(row["faq_answers"]),
+			images:           mapsValue(row["images"]),
+			docRealID:        knowledgeID,
+			kbRealID:         kbID,
+			chunkReal:        chunkID,
+			inputOrder:       idx,
 		})
 	}
 	return chunks
@@ -493,6 +497,7 @@ func (r *sourceRegistry) modelKnowledgeChunksOutput(data map[string]interface{},
 		var b strings.Builder
 		b.WriteString("<retrieval type=\"knowledge\" mode=\"deep_read\">\n")
 		fmt.Fprintf(&b, "  <document id=\"%s\" title=\"%s\">\n", escapeAttr(docHandle), escapeAttr(title))
+		writeOriginalDownload(&b, info, knowledgeID)
 		writeDocumentInfo(&b, info)
 		if query := stringValue(data, "query"); query != "" {
 			fmt.Fprintf(&b, "    <matches query=\"%s\" count=\"0\" />\n", escapeAttr(query))
@@ -587,13 +592,14 @@ func writeDocumentInfo(b *strings.Builder, info map[string]interface{}) {
 
 func renderKnowledgeChunks(mode string, chunks []modelChunk, info map[string]interface{}) string {
 	type docGroup struct {
-		handle   string
-		realID   string
-		kbHandle string
-		title    string
-		metadata string
-		chunks   []modelChunk
-		order    int
+		handle           string
+		realID           string
+		kbHandle         string
+		title            string
+		metadata         string
+		originalDownload string
+		chunks           []modelChunk
+		order            int
 	}
 	groupsByKey := make(map[string]*docGroup)
 	var groups []*docGroup
@@ -607,11 +613,15 @@ func renderKnowledgeChunks(mode string, chunks []modelChunk, info map[string]int
 			group = &docGroup{
 				handle: chunk.docHandle, realID: chunk.docRealID, kbHandle: chunk.kbHandle, title: chunk.title,
 				metadata: chunk.metadata, order: chunk.inputOrder,
+				originalDownload: chunk.originalDownload,
 			}
 			groupsByKey[key] = group
 			groups = append(groups, group)
 		} else if group.metadata == "" {
 			group.metadata = chunk.metadata
+		}
+		if group.originalDownload == "" {
+			group.originalDownload = chunk.originalDownload
 		}
 		group.chunks = append(group.chunks, chunk)
 	}
@@ -631,6 +641,10 @@ func renderKnowledgeChunks(mode string, chunks []modelChunk, info map[string]int
 			fmt.Fprintf(&b, " title=\"%s\"", escapeAttr(group.title))
 		}
 		b.WriteString(">\n")
+		writeOriginalDownload(&b, map[string]interface{}{"original_download": group.originalDownload}, group.realID)
+		if info != nil && group.originalDownload == "" {
+			writeOriginalDownload(&b, info, group.realID)
+		}
 		if group.metadata != "" {
 			fmt.Fprintf(&b, "    <metadata>%s</metadata>\n", escapeText(group.metadata))
 		}
@@ -675,6 +689,18 @@ func renderKnowledgeChunks(mode string, chunks []modelChunk, info map[string]int
 	}
 	b.WriteString("</retrieval>")
 	return b.String()
+}
+
+// Original URLs come from server-loaded knowledge entities. Keep the complete
+// path together so the resource codec can alias it before document-ID encoding.
+func writeOriginalDownload(b *strings.Builder, row map[string]interface{}, id string) {
+	if _, err := uuid.Parse(id); err != nil {
+		return
+	}
+	link := stringValue(row, "original_download")
+	if link == "/platform/source-download/"+id {
+		fmt.Fprintf(b, "    <original_download>%s</original_download>\n", escapeText(link))
+	}
 }
 
 func (r *sourceRegistry) modelWebSearchOutput(rows []map[string]interface{}, fallback string) string {
