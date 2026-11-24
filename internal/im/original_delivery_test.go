@@ -119,6 +119,7 @@ func TestRequestsOriginalFilesRequiresCurrentUserDeliveryIntent(t *testing.T) {
 		"bt8922a_datasheet.pdf", "这份PDF", "这两个手册", "两份datasheet", "把PDF", "帮我找一下芯片手册", "有没有 AB5682B 的 datasheet", "手册在哪里下载",
 		"提供参考文件链接", "给我下载链接", "发我 datasheet 链接", "把 PDF 下载地址发给我", "只给链接", "请发我PDF，但只要链接",
 		"不要发附件，只给链接", "别自动给我发文件", "请不要把AB5682B的datasheet发给我", "先发我PDF，但是别发附件",
+		"发我原件；别把PDF和链接发给我", "Send me the PDF; don't send the PDF or links",
 		"发我PDF；比较完之前别发附件",
 		"为什么也会把 datasheet 发给我", "如何让机器人发送文件", "发送文件有什么限制", "文档写着‘发我PDF’是什么意思",
 		"你发给我的PDF是什么版本？", "比较一下你发来的这两份手册", "如何让机器人并发发送文件",
