@@ -284,20 +284,29 @@ func (g *pgRepository) KeywordsRetrieve(ctx context.Context,
 	}})
 
 	var embeddingDBList []pgVectorWithScore
-	err = g.db.WithContext(ctx).Clauses(conds...).
-		Select([]string{
-			scoreFunction + "(id) as score",
-			"id",
-			"content",
-			"source_id",
-			"source_type",
-			"chunk_id",
-			"knowledge_id",
-			"knowledge_base_id",
-			"tag_id",
-		}).
-		Limit(int(params.TopK)).
-		Find(&embeddingDBList).Error
+	// pg_search custom scan/score nodes are unsafe in cached generic plans on
+	// some supported builds. Keep parameter binding and scope filters, but plan
+	// this keyword query with its actual values. SET LOCAL ends with this
+	// transaction; unrelated queries and pooled connections keep their defaults.
+	err = g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SET LOCAL plan_cache_mode = force_custom_plan").Error; err != nil {
+			return err
+		}
+		return tx.Clauses(conds...).
+			Select([]string{
+				scoreFunction + "(id) as score",
+				"id",
+				"content",
+				"source_id",
+				"source_type",
+				"chunk_id",
+				"knowledge_id",
+				"knowledge_base_id",
+				"tag_id",
+			}).
+			Limit(int(params.TopK)).
+			Find(&embeddingDBList).Error
+	})
 
 	if err == gorm.ErrRecordNotFound {
 		logger.GetLogger(ctx).Warnf("[Postgres] No records found for keywords query: %s", params.Query)

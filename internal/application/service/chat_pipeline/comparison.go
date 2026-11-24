@@ -2,7 +2,9 @@ package chatpipeline
 
 import (
 	"context"
+	"maps"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/Tencent/WeKnora/internal/searchutil"
@@ -11,6 +13,8 @@ import (
 
 var comparisonIdentifier = regexp.MustCompile(`(?i)\b[a-z]{2,8}[0-9]{2,10}[a-z0-9_*-]*\b`)
 var comparisonTechnicalTerm = regexp.MustCompile(`\b[A-Z][A-Z0-9]{1,11}\b`)
+
+const comparisonAttributeEvidenceKey = "comparison_attribute_evidence"
 
 // A supplemental literal lookup preserves technical abbreviations across
 // language differences between the question and the source. The full question
@@ -52,6 +56,95 @@ func comparisonObjects(query string) []string {
 		return nil
 	}
 	return result
+}
+
+// The pooled family search can retrieve a secondary mention of an attribute
+// from one copy while another copy supplies its value. Recheck only documents
+// already seen in this request, with a fixed budget and the original scopes.
+func (p *PluginSearch) searchComparisonDocumentAttributes(ctx context.Context, cm *types.ChatManage,
+	results []*types.SearchResult, objects []string, terms string,
+) []*types.SearchResult {
+	if terms == "" || cm.DisableKeywordsMatch || len(objects) < 2 {
+		return nil
+	}
+	var names []string
+	for _, term := range strings.Fields(terms) {
+		names = append(names, regexp.QuoteMeta(term))
+	}
+	attribute := `(?:` + strings.Join(names, "|") + `)`
+	// This is candidate priority, not value extraction. Require a direct
+	// quantity/attribute relationship on one line, e.g. "12-bit ADC" or
+	// "RAM: 512KB"; "RAM retention, current 0.2mA" does not qualify.
+	value := regexp.MustCompile(`(?i)(?:\b\d+(?:\.\d+)?[ \t-]*[a-zµμ%]{1,8}[ \t]+` + attribute +
+		`\b|\b` + attribute + `[ \t:=/-]*\d+(?:\.\d+)?(?:[ \t]*[a-zµμ%]{1,8})?\b)`)
+	seeds := append(append([]*types.SearchResult(nil), cm.SearchResult...), results...)
+	var documents []*types.SearchResult
+	seen, copies := map[string]bool{}, map[string]int{}
+	for _, r := range seeds {
+		if r != nil && r.ChunkType != string(types.ChunkTypeFAQ) && r.KnowledgeBaseID != "" && r.KnowledgeID != "" && !seen[r.KnowledgeBaseID+"\x00"+r.KnowledgeID] {
+			seen[r.KnowledgeBaseID+"\x00"+r.KnowledgeID] = true
+			documents = append(documents, r)
+			copies[r.KnowledgeBaseID+"\x00"+strings.ToLower(firstPipelineTitle(r))]++
+		}
+	}
+	sort.SliceStable(documents, func(i, j int) bool {
+		return copies[documents[i].KnowledgeBaseID+"\x00"+strings.ToLower(firstPipelineTitle(documents[i]))] >
+			copies[documents[j].KnowledgeBaseID+"\x00"+strings.ToLower(firstPipelineTitle(documents[j]))]
+	})
+	seen = map[string]bool{}
+	var out []*types.SearchResult
+	queries := 0
+	for round := 0; round < 2; round++ {
+		for _, object := range objects {
+			for _, doc := range documents {
+				key := doc.KnowledgeBaseID + "\x00" + doc.KnowledgeID
+				if queries >= 6 || seen[key] || !strings.Contains(strings.ToLower(firstPipelineTitle(doc)), comparisonPrefix(object)) {
+					continue
+				}
+				var scope *types.SearchTarget
+				for _, target := range cm.SearchTargets {
+					if target == nil || target.KnowledgeBaseID != doc.KnowledgeBaseID {
+						continue
+					}
+					if (target.Type == types.SearchTargetTypeKnowledge && containsID(target.KnowledgeIDs, doc.KnowledgeID)) ||
+						(target.Type == types.SearchTargetTypeKnowledgeBase && (len(target.ScopeTagIDs) == 0 || len(target.TagIDs) > 0)) {
+						scope = target
+						break
+					}
+				}
+				if scope == nil {
+					continue
+				}
+				seen[key], queries = true, queries+1
+				_, threshold := scope.RecallThresholds(cm.VectorThreshold, cm.KeywordThreshold)
+				found, err := p.knowledgeBaseService.HybridSearch(ctx, scope.KnowledgeBaseID, types.SearchParams{
+					QueryText: terms, KnowledgeIDs: []string{doc.KnowledgeID}, TagIDs: scope.TagIDs, ScopeTagIDs: scope.ScopeTagIDs,
+					KeywordThreshold: threshold, MatchCount: 4, DisableVectorMatch: true, SkipContextEnrichment: true,
+				})
+				if err == nil {
+					for _, hit := range found {
+						if hit == nil || hit.ChunkType == string(types.ChunkTypeFAQ) || hit.KnowledgeBaseID != doc.KnowledgeBaseID || hit.KnowledgeID != doc.KnowledgeID || !value.MatchString(hit.Content) {
+							continue
+						}
+						hit.Metadata = maps.Clone(hit.Metadata)
+						if hit.Metadata == nil {
+							hit.Metadata = map[string]string{}
+						}
+						hit.Metadata[comparisonAttributeEvidenceKey] = "true"
+						for _, seed := range seeds {
+							if seed != nil && seed.ID == hit.ID && seed.KnowledgeBaseID == hit.KnowledgeBaseID && seed.KnowledgeID == hit.KnowledgeID {
+								seed.Metadata = hit.Metadata
+							}
+						}
+						out = append(out, hit)
+						break
+					}
+				}
+				break
+			}
+		}
+	}
+	return out
 }
 
 func comparisonPrefix(object string) string {
@@ -128,7 +221,7 @@ func (p *PluginSearch) searchComparison(ctx context.Context, cm *types.ChatManag
 			}
 		}
 	}
-	return result
+	return append(result, p.searchComparisonDocumentAttributes(ctx, cm, result, objects, terms)...)
 }
 
 // Reserve evidence per named subject before the final global cap. This keeps a
@@ -150,6 +243,15 @@ func balancedComparison(results []*types.SearchResult, objects []string, topK in
 	perObject := max(1, min(3, topK/len(objects)))
 	for _, object := range objects {
 		kept := 0
+		documents := map[string]bool{}
+		for _, item := range results {
+			if item != nil && len(out) < topK && kept < perObject && item.Metadata[comparisonAttributeEvidenceKey] == "true" &&
+				strings.Contains(strings.ToLower(firstPipelineTitle(item)), comparisonPrefix(object)) &&
+				!documents[item.KnowledgeBaseID+"\x00"+item.KnowledgeID] && add(item) {
+				documents[item.KnowledgeBaseID+"\x00"+item.KnowledgeID] = true
+				kept++
+			}
+		}
 		for _, item := range results {
 			if len(out) >= topK || kept >= perObject {
 				break

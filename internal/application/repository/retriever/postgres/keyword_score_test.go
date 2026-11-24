@@ -48,12 +48,15 @@ func TestKeywordsRetrieveScoreFunctionCompatibility(t *testing.T) {
 				`content \|\|\| \$4.*is_enabled IS NULL OR is_enabled = \$5.*` +
 				`ORDER BY "score" DESC LIMIT \$6`
 			for range 2 {
+				mock.ExpectBegin()
+				mock.ExpectExec("SET LOCAL plan_cache_mode = force_custom_plan").WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectQuery(query).
 					WithArgs("kb-test", "doc-test", "tag-test", params.Query, true, 5).
 					WillReturnRows(sqlmock.NewRows([]string{
 						"id", "chunk_id", "knowledge_id", "knowledge_base_id", "tag_id", "score",
 					}).
 						AddRow(1, "chunk-test", "doc-test", "kb-test", "tag-test", 31.15))
+				mock.ExpectCommit()
 				results, err := repo.Retrieve(context.Background(), params)
 				require.NoError(t, err)
 				require.Len(t, results, 1)
@@ -139,19 +142,37 @@ func TestKeywordsRetrieveQueryFailurePreservesResolvedFunction(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"score_function"}).AddRow("pgsearch.score"))
 	query := `SELECT pgsearch\.score\(id\) as score,.*FROM "embeddings".*`
 	cause := errors.New("keyword index unavailable")
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL plan_cache_mode = force_custom_plan").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(query).WithArgs("关键词测试", true, 5).WillReturnError(cause)
+	mock.ExpectRollback()
 	params := types.RetrieveParams{Query: "关键词测试", TopK: 5}
 	results, err := repo.KeywordsRetrieve(context.Background(), params)
 	require.Nil(t, results)
 	require.ErrorIs(t, err, cause)
 
 	// The catalog probe succeeded: retry only the retrieval, not detection.
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL plan_cache_mode = force_custom_plan").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(query).WithArgs("关键词测试", true, 5).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "score"}))
+	mock.ExpectCommit()
 	results, err = repo.KeywordsRetrieve(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Empty(t, results[0].Results)
+}
+
+func TestKeywordsRetrievePlanSettingFailureStopsQuery(t *testing.T) {
+	repo, mock := newKeywordTestRepository(t)
+	repo.keywordScoreFunction = "pgsearch.score"
+	cause := errors.New("setting unavailable")
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL plan_cache_mode = force_custom_plan").WillReturnError(cause)
+	mock.ExpectRollback()
+	results, err := repo.KeywordsRetrieve(context.Background(), types.RetrieveParams{Query: "part123", TopK: 5})
+	require.Nil(t, results)
+	require.ErrorIs(t, err, cause)
 }
 
 func TestVectorRetrieveDoesNotRequireKeywordScoreFunction(t *testing.T) {

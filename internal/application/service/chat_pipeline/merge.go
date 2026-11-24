@@ -115,6 +115,9 @@ func (p *PluginMerge) selectInputResults(ctx context.Context, chatManage *types.
 		// Graph hits have no retrieval score (0) and would always fall
 		// below the cut; entity search already bounds how many it adds.
 		kept := exactIdentifierTopK(result, singleExactIdentifier(chatManage), k)
+		if objects := comparisonObjects(chatManage.Query); len(objects) > 1 {
+			kept = balancedComparison(result, objects, k)
+		}
 		seen := make(map[string]bool, len(kept))
 		for _, r := range kept {
 			seen[r.ID] = true
