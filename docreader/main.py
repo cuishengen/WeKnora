@@ -234,7 +234,11 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                 if not result or not result.content:
                     error_msg = f"Failed to parse: {source_desc}"
                     logger.error(error_msg)
-                    return ReadResponse(error=error_msg)
+                    return ReadResponse(
+                        error=error_msg,
+                        metadata={k: to_valid_utf8_text(str(v)) for k, v in (result.metadata or {}).items()}
+                        if result else {},
+                    )
 
                 _c = to_valid_utf8_text
                 image_dir, image_refs = _resolve_images(result.images, request_id)
@@ -325,7 +329,11 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                 error_msg = f"Failed to parse: {source_desc}"
                 logger.error(error_msg)
                 parsed_stream.close()
-                yield ReadStreamResponse(meta=ReadStreamMeta(error=error_msg))
+                yield ReadStreamResponse(meta=ReadStreamMeta(
+                    error=error_msg,
+                    metadata={k: _c(str(v)) for k, v in (result.metadata or {}).items()}
+                    if result else {},
+                ))
                 return
 
             images = result.images or {}

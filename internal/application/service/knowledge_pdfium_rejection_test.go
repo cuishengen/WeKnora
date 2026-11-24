@@ -20,6 +20,7 @@ func TestConvertUsesStructuredPDFiumInputRejectionOnlyForStagedDocuments(t *test
 		{name: "malformed", kind: "document_content", source: "pdfium", code: "pdf_invalid_format", wantRejected: true},
 		{name: "password", kind: "document_content", source: "pdfium", code: "pdf_password_required", wantRejected: true},
 		{name: "security", kind: "document_content", source: "pdfium", code: "pdf_unsupported_security", wantRejected: true},
+		{name: "empty PDF", kind: "document_content", source: "pdfium", code: "pdf_empty_content", wantRejected: true},
 		{name: "same error text without metadata"},
 		{name: "unknown kind", kind: "operational", source: "pdfium", code: "pdf_invalid_format"},
 		{name: "unknown source", kind: "document_content", source: "other", code: "pdf_invalid_format"},

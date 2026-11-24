@@ -254,6 +254,21 @@ def _page_image_area_ratio(page, raw) -> float:
     return image_area / page_area
 
 
+def _page_has_visible_graphics(page, raw) -> bool:
+    """Outlined letters and vector-only drawings have no bitmap/text layer."""
+    width, height = page.get_size()
+    for obj in page.get_objects():
+        if obj.type not in (
+            raw.FPDF_PAGEOBJ_PATH, raw.FPDF_PAGEOBJ_IMAGE,
+            raw.FPDF_PAGEOBJ_FORM, raw.FPDF_PAGEOBJ_SHADING,
+        ):
+            continue
+        left, bottom, right, top = obj.get_bounds()
+        if min(right, width) > max(left, 0) and min(top, height) > max(bottom, 0):
+            return True
+    return False
+
+
 def _extract_page_text(page) -> str:
     """Plain top-to-bottom text extraction (fallback path)."""
     textpage = None
@@ -2354,6 +2369,9 @@ class PDFParser(BaseParser):
                     plain = _extract_page_text(page)
                     ratio = _page_image_area_ratio(page, pdfium_r)
                     cls = _classify_page(ratio, len(plain.strip()))
+                    if cls == "text" and len(plain.strip()) < SCAN_MIN_CHARS_PER_PAGE and \
+                            _page_has_visible_graphics(page, pdfium_r):
+                        cls = "scanned"
                     # Layout reconstruction only pays off (and is only spent) on
                     # native text pages; scanned pages are rendered, not read.
                     if cls == "text" and LAYOUT_ORDERING:
@@ -2502,6 +2520,12 @@ class PDFParser(BaseParser):
             "vector_figure_count": vector_figure_count,
             "image_source_type": "scanned_pdf" if scanned_indices else "pdf_text_layer",
         }
+        if not content_text and not images and not scanned_indices:
+            # A successfully loaded PDF with no usable page content is a
+            # document rejection; transport/storage/model failures never enter
+            # this branch and must still abort/retry the source operation.
+            metadata.update(error_kind="document_content", error_source="pdfium",
+                            error_code="pdf_empty_content")
 
         logger.info(
             "PDFParser: %s -> %d pages (%d scanned, %d text), "

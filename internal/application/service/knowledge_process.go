@@ -4488,7 +4488,7 @@ func isPDFiumDocumentRejection(result *types.ReadResult) bool {
 		return false
 	}
 	switch result.Metadata["error_code"] {
-	case "pdf_invalid_format", "pdf_password_required", "pdf_unsupported_security":
+	case "pdf_invalid_format", "pdf_password_required", "pdf_unsupported_security", "pdf_empty_content":
 		return true
 	default:
 		return false

@@ -1169,6 +1169,8 @@ type streamSyncHandler struct {
 	result    *types.SyncResult
 	syncLog   *types.SyncLog
 	ingestErr error
+	// Only incremental NAS imports yield, between successfully checkpointed files.
+	yieldAt time.Time
 	// Count separately from the capped error samples; unsupported and oversized
 	// files must not disable future syncs, including runs with both failure types.
 	nonBlockingFailures int
@@ -1182,6 +1184,10 @@ func (h *streamSyncHandler) Emit(ctx context.Context, item types.FetchedItem) er
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !h.yieldAt.IsZero() && h.result.Created+h.result.Updated+h.result.Skipped > 0 &&
+		(h.result.Total >= nasSyncBatchItems || !time.Now().Before(h.yieldAt)) {
+		return errNASBatchComplete
 	}
 	h.result.Total++
 	nonBlocking, err := h.svc.applyFetchedItem(withKBActivitySuppressed(ctx), h.ds, &item, h.tagIDs, h.result)
@@ -1310,6 +1316,9 @@ func (s *DataSourceService) processSyncStreaming(
 
 	result := &types.SyncResult{}
 	handler := &streamSyncHandler{svc: s, ds: ds, tagIDs: autoTagIDs, result: result, syncLog: syncLog}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem && !forceFull {
+		handler.yieldAt = time.Now().Add(nasSyncBatchDuration)
+	}
 
 	fullBaseline := startCursor
 	if forceFull {
@@ -1329,6 +1338,15 @@ func (s *DataSourceService) processSyncStreaming(
 	if handler.ingestErr != nil {
 		// Do not publish a final cursor even if the connector ignored an Emit error.
 		fetchErr = handler.ingestErr
+	}
+	if errors.Is(fetchErr, errNASBatchComplete) {
+		if err := s.enqueueNASContinuation(ctx, ds, payload); err == nil {
+			// The existing log stays running and the final scan timestamp stays
+			// unset. Only the last batch may publish a complete source cursor.
+			return nil
+		} else {
+			fetchErr = err
+		}
 	}
 	if fetchErr != nil {
 		// Progress so far is already checkpointed onto ds.LastSyncCursor; leave
