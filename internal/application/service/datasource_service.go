@@ -1167,6 +1167,7 @@ type streamSyncHandler struct {
 	ds        *types.DataSource
 	tagIDs    []string
 	result    *types.SyncResult
+	base      *types.SyncResult // completed batches; never part of the batch limit
 	syncLog   *types.SyncLog
 	ingestErr error
 	// Only incremental NAS imports yield, between successfully checkpointed files.
@@ -1228,12 +1229,14 @@ func (h *streamSyncHandler) Checkpoint(ctx context.Context, cursor *types.SyncCu
 	}
 
 	// Best-effort live progress; a failure here must not abort the sync.
-	h.syncLog.ItemsTotal = h.result.Total
-	h.syncLog.ItemsCreated = h.result.Created
-	h.syncLog.ItemsUpdated = h.result.Updated
-	h.syncLog.ItemsDeleted = h.result.Deleted
-	h.syncLog.ItemsSkipped = h.result.Skipped
-	h.syncLog.ItemsFailed = h.result.Failed
+	progress := mergedSyncResults(h.base, h.result)
+	h.syncLog.ItemsTotal = progress.Total
+	h.syncLog.ItemsCreated = progress.Created
+	h.syncLog.ItemsUpdated = progress.Updated
+	h.syncLog.ItemsDeleted = progress.Deleted
+	h.syncLog.ItemsSkipped = progress.Skipped
+	h.syncLog.ItemsFailed = progress.Failed
+	h.syncLog.Result, _ = progress.ToJSON()
 	if err := h.svc.syncLogRepo.UpdateResult(ctx, h.syncLog); err != nil {
 		logger.Warnf(ctx, "failed to persist sync log progress at checkpoint: %v", err)
 	}
@@ -1271,10 +1274,16 @@ func (s *DataSourceService) processSyncStreaming(
 	// Tenant + auto-tag setup must precede fetching because the stream ingests
 	// each item on the fly.
 	ctx = context.WithValue(ctx, types.TenantIDContextKey, ds.TenantID)
+	var base *types.SyncResult
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		base = payload.CompletedBatchesResult
+	}
 	tenant, err := s.tenantRepo.GetTenantByID(ctx, ds.TenantID)
 	if err != nil {
 		logger.Errorf(ctx, "failed to get tenant info: %v", err)
-		s.updateSyncRunResult(ctx, ds, syncLog, &types.SyncResult{}, nil,
+		progress := mergedSyncResults(base, nil)
+		encoded, _ := progress.ToJSON()
+		s.updateSyncRunResult(ctx, ds, syncLog, progress, encoded,
 			types.SyncLogStatusFailed, fmt.Sprintf("Failed to get tenant info: %v", err), wasPaused)
 		return err
 	}
@@ -1284,7 +1293,7 @@ func (s *DataSourceService) processSyncStreaming(
 		// A durable retry is an active attempt, including after startup marked
 		// an interrupted attempt failed. Do not leave the UI/scheduler stale.
 		syncLog.Status, syncLog.FinishedAt, syncLog.ErrorMessage = types.SyncLogStatusRunning, nil, ""
-		syncLog.Result = nil
+		syncLog.Result, _ = mergedSyncResults(base, nil).ToJSON()
 		if err := s.syncLogRepo.UpdateResult(ctx, syncLog); err != nil {
 			return err
 		}
@@ -1309,13 +1318,15 @@ func (s *DataSourceService) processSyncStreaming(
 	startCursor, err := streamStartCursor(ds, forceFull, attempt)
 	if err != nil {
 		logger.Errorf(ctx, "failed to parse sync cursor: %v", err)
-		s.updateSyncRunResult(ctx, ds, syncLog, &types.SyncResult{}, nil,
+		progress := mergedSyncResults(base, nil)
+		encoded, _ := progress.ToJSON()
+		s.updateSyncRunResult(ctx, ds, syncLog, progress, encoded,
 			types.SyncLogStatusFailed, fmt.Sprintf("Invalid cursor: %v", err), wasPaused)
 		return err
 	}
 
 	result := &types.SyncResult{}
-	handler := &streamSyncHandler{svc: s, ds: ds, tagIDs: autoTagIDs, result: result, syncLog: syncLog}
+	handler := &streamSyncHandler{svc: s, ds: ds, tagIDs: autoTagIDs, result: result, base: base, syncLog: syncLog}
 	if ds.Type == types.ConnectorTypeDokuWikiFilesystem && !forceFull {
 		handler.yieldAt = time.Now().Add(nasSyncBatchDuration)
 	}
@@ -1340,7 +1351,9 @@ func (s *DataSourceService) processSyncStreaming(
 		fetchErr = handler.ingestErr
 	}
 	if errors.Is(fetchErr, errNASBatchComplete) {
-		if err := s.enqueueNASContinuation(ctx, ds, payload); err == nil {
+		next := payload
+		next.CompletedBatchesResult = mergedSyncResults(base, result)
+		if err := s.enqueueNASContinuation(ctx, ds, next); err == nil {
 			// The existing log stays running and the final scan timestamp stays
 			// unset. Only the last batch may publish a complete source cursor.
 			return nil
@@ -1348,22 +1361,24 @@ func (s *DataSourceService) processSyncStreaming(
 			fetchErr = err
 		}
 	}
+	totalResult := mergedSyncResults(base, result)
 	if fetchErr != nil {
 		// Progress so far is already checkpointed onto ds.LastSyncCursor; leave
 		// it in place so the Asynq retry resumes from there. Persist counts.
 		logger.Errorf(ctx, "streaming fetch failed: %v", fetchErr)
-		resultJSON, _ := result.ToJSON()
-		s.updateSyncRunResult(ctx, ds, syncLog, result, resultJSON,
+		resultJSON, _ := totalResult.ToJSON()
+		s.updateSyncRunResult(ctx, ds, syncLog, totalResult, resultJSON,
 			types.SyncLogStatusFailed, fmt.Sprintf("Fetch failed: %v", fetchErr), wasPaused)
 		return fetchErr
 	}
 
-	resultJSON, _ := result.ToJSON()
+	resultJSON, _ := totalResult.ToJSON()
 	if err := allFetchedItemsFailedError(result, handler.nonBlockingFailures); err != nil {
 		logger.Errorf(ctx, "streaming sync failed while processing fetched items: %v", err)
-		s.updateSyncRunResult(ctx, ds, syncLog, result, resultJSON, types.SyncLogStatusFailed, err.Error(), wasPaused)
+		s.updateSyncRunResult(ctx, ds, syncLog, totalResult, resultJSON, types.SyncLogStatusFailed, err.Error(), wasPaused)
 		return err
 	}
+	result = totalResult
 
 	// Persist the final cursor for the next incremental sync.
 	if nextCursor != nil {

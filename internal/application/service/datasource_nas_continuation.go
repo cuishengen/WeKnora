@@ -18,6 +18,28 @@ const nasSyncBatchDuration = 30 * time.Minute
 
 var errNASBatchComplete = errors.New("NAS sync batch checkpointed; continue in another task")
 
+// Keep the completed-batch base separate from the current batch counters:
+// seeding Total with it would immediately exhaust the next batch's limit.
+func mergedSyncResults(base, batch *types.SyncResult) *types.SyncResult {
+	result := &types.SyncResult{}
+	for _, part := range []*types.SyncResult{base, batch} {
+		if part == nil {
+			continue
+		}
+		result.Total += part.Total
+		result.Created += part.Created
+		result.Updated += part.Updated
+		result.Deleted += part.Deleted
+		result.Skipped += part.Skipped
+		result.Failed += part.Failed
+		result.DeletionFailed += part.DeletionFailed
+		for _, item := range part.Errors {
+			recordSyncError(result, item)
+		}
+	}
+	return result
+}
+
 // A large first import must not spend its finite failure retries on normal
 // progress. Hand off between documents, after the connector saved their hashes;
 // retain the original source, sync log and initiator, and the two-hour task cap.

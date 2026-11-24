@@ -520,6 +520,10 @@ type DataSourceSyncPayload struct {
 
 	// Maximum number of items to fetch (0 = unlimited)
 	MaxItems int `json:"max_items,omitempty"`
+
+	// Immutable totals from successfully handed-off NAS batches. A retry of the
+	// same task keeps this base; the current batch still has its own item limit.
+	CompletedBatchesResult *SyncResult `json:"completed_batches_result,omitempty"`
 }
 
 // ToJSON converts a DataSourceConfig to the JSON blob stored in
