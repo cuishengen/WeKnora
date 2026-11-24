@@ -44,6 +44,9 @@ func (p *PluginFilterTopK) OnEvent(ctx context.Context,
 			// Results the rerank stage kept outside its top-k (pictorial
 			// images a text reranker could not judge) ride along.
 			filtered := balancedComparison(searchResult, comparisonObjects(chatManage.Query), topK)
+			if identifier := singleExactIdentifier(chatManage); identifier != "" {
+				filtered = exactIdentifierTopK(searchResult, identifier, topK)
+			}
 			pipelineInfo(ctx, "FilterTopK", "filter", map[string]interface{}{
 				"before": len(searchResult),
 				"after":  len(filtered),

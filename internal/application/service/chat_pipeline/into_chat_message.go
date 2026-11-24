@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/reranking"
 	"github.com/Tencent/WeKnora/internal/searchutil"
@@ -345,18 +347,94 @@ func buildDocumentHeader(results []*types.SearchResult) string {
 
 // getEnrichedPassageForChat 合并Content和ImageInfo的文本内容，为聊天消息准备
 func getEnrichedPassageForChat(ctx context.Context, result *types.SearchResult) string {
-	// 如果没有图片信息，直接返回内容
 	if result.Content == "" && result.ImageInfo == "" {
 		return ""
 	}
 
-	// 如果只有内容，没有图片信息
-	if result.ImageInfo == "" {
-		return result.Content
+	content := result.Content
+	if result.ImageInfo != "" {
+		content = enrichContentWithImageInfo(ctx, content, result.ImageInfo)
+	}
+	return sourceProvenanceContext(result.Metadata) + spreadsheetPassageContext(result.SourceLocators) + content
+}
+
+// sourceProvenanceContext retains the source labels needed to distinguish
+// identically named documents. Only this explicit allowlist reaches the model;
+// connector credentials, storage locations and internal IDs must stay private.
+func sourceProvenanceContext(metadata map[string]string) string {
+	var b strings.Builder
+	for _, key := range []string{"source_alias", "relative_path", "source_id"} {
+		if value := strings.TrimSpace(metadata[key]); value != "" {
+			fmt.Fprintf(&b, "- %s: %q\n", key, value)
+		}
+	}
+	if raw := strings.TrimSpace(metadata["source_url"]); raw != "" {
+		if sourceURL, err := url.Parse(raw); err == nil && sourceURL.Host != "" &&
+			(sourceURL.Scheme == "https" || sourceURL.Scheme == "http") {
+			// Source URLs may contain signed query parameters or basic auth.
+			// Path/identity labels above distinguish copies without those secrets.
+			sourceURL.User = nil
+			sourceURL.RawQuery = ""
+			sourceURL.ForceQuery = false
+			sourceURL.Fragment = ""
+			fmt.Fprintf(&b, "- source_url (credentials/query/fragment omitted): %q\n", sourceURL.String())
+		}
+	}
+	if modified, err := time.Parse(time.RFC3339, metadata["source_updated_at"]); err == nil {
+		fmt.Fprintf(&b, "- source_modified_at (connector/file modification time, not document publication date): %s\n",
+			modified.UTC().Format(time.RFC3339))
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "[Source provenance: distinguish source copies by these labels; they do not establish version priority.]\n" + b.String() + "\n"
+}
+
+// spreadsheetPassageContext exposes positions already stored with a passage.
+// Both the persisted context and the final model view use this path; adding
+// source_locators to the tool-result map alone would be dropped by its renderer.
+// Do not infer column labels or individual row positions from a folded range.
+func spreadsheetPassageContext(locators types.SourceLocators) string {
+	type sheetRange struct {
+		sheet string
+		start int
+		end   int
+	}
+	seen := make(map[sheetRange]bool)
+	sheets := make(map[string]bool)
+	var ranges []sheetRange
+	partial := false
+	for _, locator := range locators {
+		if locator.Type != types.SourceLocatorSheet || strings.TrimSpace(locator.Sheet) == "" ||
+			locator.RowStart < 1 || locator.RowEnd < locator.RowStart {
+			continue
+		}
+		position := sheetRange{locator.Sheet, locator.RowStart, locator.RowEnd}
+		if !seen[position] {
+			seen[position] = true
+			ranges = append(ranges, position)
+		}
+		sheets[locator.Sheet] = true
+		partial = partial || locator.Partial
+	}
+	if len(ranges) == 0 {
+		return ""
 	}
 
-	// 处理图片信息并与内容合并
-	return enrichContentWithImageInfo(ctx, result.Content, result.ImageInfo)
+	var b strings.Builder
+	b.WriteString("[Spreadsheet source locations: row numbers refer to original worksheet rows, not item numbers. " +
+		"Column letters alone do not establish field meanings; use headers from the same worksheet before interpreting quantities.]\n")
+	for _, position := range ranges {
+		fmt.Fprintf(&b, "- Worksheet %q: rows %d-%d.\n", position.sheet, position.start, position.end)
+	}
+	if len(sheets) > 1 {
+		b.WriteString("[This passage spans multiple worksheets. Keep their data and headers separate; " +
+			"the locations above do not assign each text row to a worksheet.]\n")
+	}
+	if partial {
+		b.WriteString("[Some passage text has no source mapping; these locations do not cover all text.]\n")
+	}
+	return b.String() + "\n"
 }
 
 // enrichContentWithImageInfo delegates to the shared searchutil implementation.

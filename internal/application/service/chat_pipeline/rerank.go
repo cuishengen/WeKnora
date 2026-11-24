@@ -120,6 +120,15 @@ func (p *PluginRerank) OnEvent(ctx context.Context,
 		opts.FAQScoreBoost = chatManage.FAQScoreBoost
 	}
 	res := reranking.Rerank(ctx, rerankModel, chatManage.RewriteQuery, chatManage.SearchResult, opts)
+	if identifier := singleExactIdentifier(chatManage); identifier != "" && res.Diagnostics.Outcome != types.RerankOutcomeModelError {
+		before := len(res.Results)
+		res.Results = retainExactIdentifierEvidence(res.Results, chatManage.SearchResult,
+			identifier, max(1, chatManage.RerankTopK))
+		res.Diagnostics.ResultCount = len(res.Results)
+		pipelineInfo(ctx, "Rerank", "exact_identifier_evidence", map[string]interface{}{
+			"ranked_count": before, "kept_count": len(res.Results),
+		})
+	}
 	*diag = res.Diagnostics
 	diag.ModelID = chatManage.RerankModelID
 

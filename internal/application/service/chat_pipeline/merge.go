@@ -90,7 +90,7 @@ func (p *PluginMerge) OnEvent(ctx context.Context,
 
 	// Step 8: Final dedup — catches exact duplicates plus partial content overlaps
 	mergedChunks = p.dedup(ctx, "final_dedup", mergedChunks)
-	mergedChunks = removePartialOverlaps(ctx, mergedChunks)
+	mergedChunks = removePartialOverlaps(ctx, mergedChunks, singleExactIdentifier(chatManage))
 
 	p.attachCitationSources(ctx, mergedChunks)
 	chatManage.MergeResult = mergedChunks
@@ -114,10 +114,15 @@ func (p *PluginMerge) selectInputResults(ctx context.Context, chatManage *types.
 	if k := chatManage.RerankTopK; k > 0 && len(result) > k {
 		// Graph hits have no retrieval score (0) and would always fall
 		// below the cut; entity search already bounds how many it adds.
-		kept := result[:k:k]
-		for _, r := range result[k:] {
-			if r.MatchType == types.MatchTypeGraph {
+		kept := exactIdentifierTopK(result, singleExactIdentifier(chatManage), k)
+		seen := make(map[string]bool, len(kept))
+		for _, r := range kept {
+			seen[r.ID] = true
+		}
+		for _, r := range result {
+			if r.MatchType == types.MatchTypeGraph && !seen[r.ID] {
 				kept = append(kept, r)
+				seen[r.ID] = true
 			}
 		}
 		// This cut already hides candidates from the prompt, so record it

@@ -149,6 +149,13 @@ func (p *PluginSearch) OnEvent(ctx context.Context,
 			chatManage.SearchResult = append(chatManage.SearchResult, expResults...)
 		}
 	}
+	if exact := p.searchExactIdentifier(ctx, chatManage); len(exact) > 0 {
+		chatManage.SearchResult = append(chatManage.SearchResult, exact...)
+		// Literal recall can return the same chunk with a stronger keyword score.
+		// Deduplicate only after restoring a deterministic relevance order.
+		sortSearchResultsDeterministically(chatManage.SearchResult)
+		chatManage.SearchResult = removeDuplicateResults(chatManage.SearchResult)
+	}
 
 	logSearchScoreSample(ctx, "final_score", chatManage.SearchResult)
 
@@ -241,7 +248,7 @@ func buildContentSignature(content string) string {
 // The input slice MUST already be deduplicated by ID/signature. Within each
 // pair the chunk with the lower score is the candidate for removal; ties are
 // broken by content length (longer wins).
-func removePartialOverlaps(ctx context.Context, results []*types.SearchResult) []*types.SearchResult {
+func removePartialOverlaps(ctx context.Context, results []*types.SearchResult, protectedIdentifier ...string) []*types.SearchResult {
 	const (
 		overlapThreshold    = 0.85
 		maxOverlapSizeRatio = 3
@@ -277,6 +284,12 @@ func removePartialOverlaps(ctx context.Context, results []*types.SearchResult) [
 	}
 
 	removed := make(map[int]bool)
+	var exactMatch func(string) bool
+	if len(protectedIdentifier) > 0 {
+		if match := exactIdentifierMatcher(protectedIdentifier[0]); match != nil {
+			exactMatch = match.MatchString
+		}
+	}
 
 	for i := 0; i < len(entries); i++ {
 		if removed[i] {
@@ -316,12 +329,18 @@ func removePartialOverlaps(ctx context.Context, results []*types.SearchResult) [
 			if entries[shortIdx].result.Score > entries[longIdx].result.Score {
 				victim = longIdx
 			}
-			removed[victim] = true
-
 			keptIdx := i
 			if victim == i {
 				keptIdx = j
 			}
+			// Similar tables can differ only in one part-number cell. An
+			// approximate overlap must not erase the requested identifier.
+			if exactMatch != nil && exactMatch(entries[victim].result.Content) &&
+				!exactMatch(entries[keptIdx].result.Content) {
+				continue
+			}
+			removed[victim] = true
+
 			searchutil.InheritImageEvidence(entries[keptIdx].result, entries[victim].result)
 			pipelineInfo(ctx, "Merge", "partial_overlap_drop", map[string]interface{}{
 				"kept_id":    entries[keptIdx].result.ID,
