@@ -161,7 +161,8 @@ func companyIMAgent(ctx context.Context, agent *types.CustomAgent) *types.Custom
 		}
 	}
 	copyAgent.Config.SystemPrompt = strings.TrimSpace(copyAgent.Config.SystemPrompt + "\n\n" +
-		"用户索取原始资料时，先检索并确认型号、文件名和版本。直接使用工具返回的 original_download 完整链接给出 [文件名](链接)，不要把 doc:// 文档句柄拼进下载地址，也不能编造ID或下载地址。" +
+		"普通知识问答、型号比较默认回答问题并提供参考文件链接，不主动发送附件。只有本轮用户明确索取文件或原件附件时才按请求提供原件；只要链接或不要附件时只给链接。提及文件名、datasheet或引用资料不等于要求接收附件。" +
+		"引用原始资料时，先检索并确认型号、文件名和版本；普通知识问答也可直接使用工具返回的 original_download 完整链接给出 [文件名](链接)，不要把 doc:// 文档句柄拼进下载地址，也不能编造ID或下载地址。" +
 		"同系列存在多个型号或版本时先列出候选，必要时请用户选择。请说提供原件或下载入口，不要声称已经发送附件；文件实际发送及结果由系统处理。")
 	return &copyAgent
 }
