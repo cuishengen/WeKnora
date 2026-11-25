@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 type companyStreamAdapter struct {
 	*fullOutputAdapter
+	mu         sync.Mutex
 	chunks     []string
 	frames     []string
 	cache      string
@@ -29,6 +31,8 @@ type companyStreamAdapter struct {
 }
 
 func (a *companyStreamAdapter) UpdateStreamContent(ctx context.Context, msg *IncomingMessage, id, content string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.chunks = append(a.chunks, content)
 	a.frames = append(a.frames, content)
 	a.cache = content
@@ -39,6 +43,8 @@ func (a *companyStreamAdapter) UpdateStreamContent(ctx context.Context, msg *Inc
 }
 
 func (a *companyStreamAdapter) FinalizeStream(ctx context.Context, msg *IncomingMessage, id, content string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.frames = append(a.frames, content)
 	a.cache = content
 	a.finalizes++
@@ -49,6 +55,8 @@ func (a *companyStreamAdapter) FinalizeStream(ctx context.Context, msg *Incoming
 }
 
 func (a *companyStreamAdapter) EndStream(ctx context.Context, msg *IncomingMessage, id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.frames = append(a.frames, a.cache)
 	a.endFrames = append(a.endFrames, a.cache)
 	return a.fullOutputAdapter.EndStream(ctx, msg, id)
@@ -56,22 +64,61 @@ func (a *companyStreamAdapter) EndStream(ctx context.Context, msg *IncomingMessa
 
 func (a *companyStreamAdapter) MaxFileSize() int64 { return 1024 }
 func (a *companyStreamAdapter) SendFile(_ context.Context, _ *IncomingMessage, _ string, data []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.files++
 	a.fileBytes = append(a.fileBytes, append([]byte(nil), data...))
 	return nil
 }
 
 func (a *companyStreamAdapter) SendReply(ctx context.Context, msg *IncomingMessage, reply *ReplyMessage) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.frames = append(a.frames, reply.Content)
 	return a.fullOutputAdapter.SendReply(ctx, msg, reply)
 }
 
-func newCompanyStreamHarness(t *testing.T, run func(context.Context, *event.EventBus) error) (*Service, *companyStreamAdapter, *testEmployeeChecker, context.Context, *IncomingMessage) {
+func (a *companyStreamAdapter) progressSnapshot() ([]string, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.chunks...), a.finalContent
+}
+
+type companyStreamChecker struct {
+	*testEmployeeChecker
+	mu sync.Mutex
+}
+
+func (c *companyStreamChecker) LookupWeCom(ctx context.Context, id string) (*companyidentity.Member, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.testEmployeeChecker.LookupWeCom(ctx, id)
+}
+
+func (c *companyStreamChecker) Check(ctx context.Context, binding companyidentity.Binding) (*companyidentity.Member, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.testEmployeeChecker.Check(ctx, binding)
+}
+
+func (c *companyStreamChecker) revoke() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.allowed = false
+}
+
+func (c *companyStreamChecker) checkCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.checks
+}
+
+func newCompanyStreamHarness(t *testing.T, run func(context.Context, *event.EventBus) error) (*Service, *companyStreamAdapter, *companyStreamChecker, context.Context, *IncomingMessage) {
 	t.Helper()
 	svc, base, _, _ := newFullOutputHarness("")
 	svc.sessionService = &streamExitSessionService{run: run}
 	svc.messageService = &deliveryMessageService{}
-	checker := employeeFixture()
+	checker := &companyStreamChecker{testEmployeeChecker: employeeFixture()}
 	svc.employeeChecker = checker
 	svc.companyDownloadBase = "https://identity.example/company/knowledge"
 	msg := &IncomingMessage{Platform: PlatformWeCom, UserID: "member", Content: "比较芯片 RAM"}
@@ -94,7 +141,8 @@ func TestCompanyStreamShowsImmediateStagesAndIncrementalPublicAnswer(t *testing.
 			synctest.Test(t, func(t *testing.T) {
 				var adapter *companyStreamAdapter
 				svc, sender, _, ctx, msg := newCompanyStreamHarness(t, func(ctx context.Context, bus *event.EventBus) error {
-					require.Equal(t, []string{"已收到，正在处理…"}, adapter.chunks, "visible acknowledgment must precede QA")
+					chunks, _ := adapter.progressSnapshot()
+					require.Equal(t, []string{"已收到，正在处理…"}, chunks, "visible acknowledgment must precede QA")
 					_ = bus.Emit(ctx, event.Event{Type: event.EventAgentThought, Data: event.AgentThoughtData{Content: "SECRET_THOUGHT /private/path"}})
 					_ = bus.Emit(ctx, event.Event{Type: event.EventAgentToolCall, Data: event.AgentToolCallData{ToolName: "search_knowledge", Arguments: map[string]any{"query": "SECRET_ARGUMENT"}, Hint: "SECRET_HINT"}})
 					time.Sleep(2 * time.Second)
@@ -117,18 +165,22 @@ func TestCompanyStreamShowsImmediateStagesAndIncrementalPublicAnswer(t *testing.
 				done := make(chan error, 1)
 				go func() { done <- runCompanyStream(svc, adapter, ctx, msg, agent) }()
 				synctest.Wait()
-				require.Equal(t, []string{"已收到，正在处理…"}, adapter.chunks)
+				chunks, _ := adapter.progressSnapshot()
+				require.Equal(t, []string{"已收到，正在处理…"}, chunks)
 				time.Sleep(1500 * time.Millisecond)
 				synctest.Wait()
-				require.Contains(t, adapter.chunks, "正在检索资料…")
+				chunks, _ = adapter.progressSnapshot()
+				require.Contains(t, chunks, "正在检索资料…")
 				time.Sleep(2 * time.Second)
 				synctest.Wait()
-				require.Contains(t, adapter.chunks[len(adapter.chunks)-1], "第一部分")
-				require.Empty(t, adapter.finalContent, "first public answer must arrive before terminal event")
+				chunks, final := adapter.progressSnapshot()
+				require.Contains(t, chunks[len(chunks)-1], "第一部分")
+				require.Empty(t, final, "first public answer must arrive before terminal event")
 				time.Sleep(2 * time.Second)
 				synctest.Wait()
-				require.Contains(t, adapter.chunks[len(adapter.chunks)-1], "第一部分，第二部分")
-				require.Empty(t, adapter.finalContent)
+				chunks, final = adapter.progressSnapshot()
+				require.Contains(t, chunks[len(chunks)-1], "第一部分，第二部分")
+				require.Empty(t, final)
 				require.NoError(t, <-done)
 				require.Equal(t, "第一部分，第二部分", adapter.finalContent)
 				require.Equal(t, []string{"第一部分，第二部分"}, adapter.endFrames)
@@ -157,13 +209,15 @@ func TestCompanyStreamHeartbeatDoesNotPollOrResendUnchangedContent(t *testing.T)
 		synctest.Wait()
 		time.Sleep(9 * time.Second)
 		synctest.Wait()
-		require.Len(t, adapter.chunks, 1)
-		require.Equal(t, 2, checker.checks, "no directory poll for unchanged progress")
+		chunks, _ := adapter.progressSnapshot()
+		require.Len(t, chunks, 1)
+		require.Equal(t, 2, checker.checkCount(), "no directory poll for unchanged progress")
 		time.Sleep(2 * time.Second)
 		synctest.Wait()
-		require.Len(t, adapter.chunks, 2)
-		require.Contains(t, adapter.chunks[1], "已用时 10 秒")
-		require.Equal(t, 3, checker.checks)
+		chunks, _ = adapter.progressSnapshot()
+		require.Len(t, chunks, 2)
+		require.Contains(t, chunks[1], "已用时 10 秒")
+		require.Equal(t, 3, checker.checkCount())
 		close(release)
 		require.NoError(t, <-done)
 	})
@@ -246,18 +300,18 @@ func TestCompanyStreamFailureAndCancellationAreTerminalAndGeneric(t *testing.T) 
 
 func TestCompanyStreamRechecksEveryChangedPartialAndStopsAfterRevocation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var checker *testEmployeeChecker
+		var checker *companyStreamChecker
 		svc, adapter, check, ctx, msg := newCompanyStreamHarness(t, func(ctx context.Context, bus *event.EventBus) error {
 			emitCompanyAnswer(ctx, bus, "先前允许的回答", false)
 			time.Sleep(2 * time.Second)
-			checker.allowed = false
+			checker.revoke()
 			emitCompanyAnswer(ctx, bus, "撤权后绝不能发送", false)
 			<-ctx.Done()
 			return ctx.Err()
 		})
 		checker = check
 		require.Error(t, runCompanyStream(svc, adapter, ctx, msg, streamExitAgent()))
-		require.GreaterOrEqual(t, checker.checks, 5)
+		require.GreaterOrEqual(t, checker.checkCount(), 5)
 		require.Contains(t, strings.Join(adapter.chunks, "\n"), "先前允许的回答")
 		for _, frame := range adapter.frames {
 			require.NotContains(t, frame, "撤权后绝不能发送")
@@ -277,11 +331,11 @@ func TestCompanyStreamRechecksFinalizeEndAndPlainFallback(t *testing.T) {
 			if boundary == "final" {
 				svc.sessionService = &streamExitSessionService{run: func(ctx context.Context, bus *event.EventBus) error {
 					emitCompanyAnswer(ctx, bus, "受保护正文", true)
-					checker.allowed = false
+					checker.revoke()
 					return nil
 				}}
 			} else {
-				adapter.onFinalize = func(int) { checker.allowed = false }
+				adapter.onFinalize = func(int) { checker.revoke() }
 				if boundary == "plain fallback" {
 					adapter.finalizeErr = errors.New("transport failed")
 				}
@@ -298,7 +352,7 @@ func TestCompanyStreamRechecksFinalizeEndAndPlainFallback(t *testing.T) {
 	}
 }
 
-type failingCompanyChecker struct{ *testEmployeeChecker }
+type failingCompanyChecker struct{ *companyStreamChecker }
 
 func (c *failingCompanyChecker) LookupWeCom(context.Context, string) (*companyidentity.Member, error) {
 	return nil, errors.New("directory down SECRET")
@@ -519,7 +573,9 @@ func TestCompanyStreamBoundsEveryFrameAndHoldsTruncatedLinks(t *testing.T) {
 type atomicCompanyStreamAdapter struct{ *companyStreamAdapter }
 
 func (a *atomicCompanyStreamAdapter) EndStreamWithContent(ctx context.Context, msg *IncomingMessage, id, content string) error {
+	a.mu.Lock()
 	a.cache = content
+	a.mu.Unlock()
 	return a.EndStream(ctx, msg, id)
 }
 
@@ -531,7 +587,7 @@ func TestCompanyStreamAtomicFinishClearsFailedReplacement(t *testing.T) {
 		})
 		base.finalizeErr = errors.New("replace failed")
 		if revoke {
-			base.onFinalize = func(int) { checker.allowed = false }
+			base.onFinalize = func(int) { checker.revoke() }
 		}
 		adapter := &atomicCompanyStreamAdapter{base}
 		err := svc.handleMessageStream(ctx, msg, &types.Session{ID: "session"}, streamExitAgent(), nil, nil, nil, adapter, adapter, "member-key", nil)
