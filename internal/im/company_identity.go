@@ -23,8 +23,9 @@ type employeeChecker interface {
 
 type companyIMContextKey struct{}
 type companyIMSubject struct {
-	channel *IMChannel
-	member  *companyidentity.Member
+	channel  *IMChannel
+	member   *companyidentity.Member
+	scopeKey string
 }
 
 func isCompanyIM(channel *IMChannel) bool {
@@ -79,11 +80,24 @@ func (s *Service) authorizeIMIdentity(ctx context.Context, channel *IMChannel, m
 		(previous.member.Subject != member.Subject || previous.member.Issuer != member.Issuer || previous.member.CreatedTime != member.CreatedTime) {
 		return nil, companyidentity.ErrDenied
 	}
-	ids := s.employeeChecker.AllowedKnowledgeBaseIDs()
-	if s.employeeChecker.AuthorizeKnowledgeBases(ids) != nil {
+	ids, scopeKey, err := companyChannelScope(channel, member)
+	if err != nil {
 		return nil, companyidentity.ErrDenied
 	}
-	digest := sha256.Sum256([]byte(member.Issuer + "\n" + member.Subject + "\n" + member.CreatedTime))
+	if scopeKey == "" {
+		ids = s.employeeChecker.AllowedKnowledgeBaseIDs()
+		if s.employeeChecker.AuthorizeKnowledgeBases(ids) != nil {
+			return nil, companyidentity.ErrDenied
+		}
+	}
+	if previous, ok := ctx.Value(companyIMContextKey{}).(companyIMSubject); ok && previous.scopeKey != scopeKey {
+		return nil, companyidentity.ErrDenied
+	}
+	identity := member.Issuer + "\n" + member.Subject + "\n" + member.CreatedTime
+	if scopeKey != "" {
+		identity += "\n" + scopeKey
+	}
+	digest := sha256.Sum256([]byte(identity))
 	userID := "company-im-" + hex.EncodeToString(digest[:])
 	ctx = context.WithValue(ctx, types.TenantIDContextKey, channel.TenantID)
 	ctx = context.WithValue(ctx, types.UserIDContextKey, userID)
@@ -102,7 +116,7 @@ func (s *Service) authorizeIMIdentity(ctx context.Context, channel *IMChannel, m
 	ctx = context.WithValue(ctx, types.LanguageContextKey, locale)
 	ctx = types.WithMCPOAuthNonInteractive(ctx)
 	ctx = context.WithValue(ctx, companyDownloadBaseKey{}, s.companyDownloadBase)
-	return context.WithValue(ctx, companyIMContextKey{}, companyIMSubject{channel: channel, member: member}), nil
+	return context.WithValue(ctx, companyIMContextKey{}, companyIMSubject{channel: channel, member: member, scopeKey: scopeKey}), nil
 }
 
 func imSessionMessage(ctx context.Context, channelID string, msg *IncomingMessage) *IncomingMessage {
@@ -128,13 +142,17 @@ func (s *Service) authorizeIMAnswer(ctx context.Context, msg *IncomingMessage) (
 // Restrict the request clone, never the persisted agent. A newly added library
 // cannot silently widen an existing company's IM channel.
 func companyIMAgent(ctx context.Context, agent *types.CustomAgent) *types.CustomAgent {
-	if _, ok := ctx.Value(companyIMContextKey{}).(companyIMSubject); !ok || agent == nil {
+	identity, ok := ctx.Value(companyIMContextKey{}).(companyIMSubject)
+	if !ok || agent == nil {
 		return agent
 	}
 	copyAgent := *agent
 	copyAgent.Config = agent.Config
 	copyAgent.Config.AllowedTools = []string{}
 	for _, name := range agenttools.EffectiveAllowedTools(agent.Config.AllowedTools) {
+		if identity.scopeKey != "" && name != agenttools.ToolSearchKnowledge && name != agenttools.ToolReadDocument && name != agenttools.ToolListDocuments {
+			continue
+		}
 		switch name {
 		case agenttools.ToolThinking, agenttools.ToolTodoWrite, agenttools.ToolAskUser,
 			agenttools.ToolSearchKnowledge, agenttools.ToolReadDocument, agenttools.ToolListDocuments,
@@ -159,6 +177,16 @@ func companyIMAgent(ctx context.Context, agent *types.CustomAgent) *types.Custom
 		} else {
 			copyAgent.Config.KBSelectionMode = "selected"
 		}
+	}
+	if identity.scopeKey != "" {
+		copyAgent.Config.WebSearchEnabled = false
+		copyAgent.Config.WebFetchEnabled = false
+		copyAgent.Config.DataAnalysisEnabled = false
+		copyAgent.Config.SystemPrompt = strings.TrimSpace(copyAgent.Config.SystemPrompt + "\n\n" +
+			"本渠道仅允许查询明确授权的知识库正文。库存回答须区分账面、实盘、不良和可用数量，说明盘点日期，不当作实时库存。" +
+			"引用使用原表文件名、工作表名和物理行号；空白不等于零，不以相近型号代答。" +
+			"本渠道未开放原件预览、下载或附件发送；不要提供原件地址或声称已经发送文件，需要原件时说明尚未授权。")
+		return &copyAgent
 	}
 	copyAgent.Config.SystemPrompt = strings.TrimSpace(copyAgent.Config.SystemPrompt + "\n\n" +
 		"普通知识问答、型号比较默认回答问题并提供参考文件链接，不主动发送附件。只有本轮用户明确索取文件或原件附件时才按请求提供原件；只要链接或不要附件时只给链接。提及文件名、datasheet或引用资料不等于要求接收附件。" +

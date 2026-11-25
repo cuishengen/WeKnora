@@ -113,7 +113,7 @@ func (s *Service) sendOriginalFiles(ctx context.Context, msg *IncomingMessage, a
 	}
 	identity, company := ctx.Value(companyIMContextKey{}).(companyIMSubject)
 	sender, supported := adapter.(FileSender)
-	if !company || !supported || s.employeeChecker == nil || !s.employeeChecker.OriginalDownloadsAllowed() || s.knowledgeService == nil {
+	if !company || identity.scopeKey != "" || !supported || s.employeeChecker == nil || !s.employeeChecker.OriginalDownloadsAllowed() || s.knowledgeService == nil {
 		return
 	}
 	ids := originalKnowledgeIDs(answer)
