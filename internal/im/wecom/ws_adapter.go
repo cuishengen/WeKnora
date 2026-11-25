@@ -16,10 +16,11 @@ import (
 
 // Compile-time checks.
 var (
-	_ im.Adapter        = (*WSAdapter)(nil)
-	_ im.StreamSender   = (*WSAdapter)(nil)
-	_ im.FileDownloader = (*WSAdapter)(nil)
-	_ im.FileSender     = (*WSAdapter)(nil)
+	_ im.Adapter                  = (*WSAdapter)(nil)
+	_ im.StreamSender             = (*WSAdapter)(nil)
+	_ im.StreamFinalContentSender = (*WSAdapter)(nil)
+	_ im.FileDownloader           = (*WSAdapter)(nil)
+	_ im.FileSender               = (*WSAdapter)(nil)
 )
 
 // WSAdapter implements im.Adapter and im.StreamSender for WeCom in WebSocket
@@ -81,6 +82,10 @@ func (a *WSAdapter) SendStreamChunk(ctx context.Context, incoming *im.IncomingMe
 
 func (a *WSAdapter) EndStream(ctx context.Context, incoming *im.IncomingMessage, streamID string) error {
 	return a.client.EndStream(ctx, incoming, streamID)
+}
+
+func (a *WSAdapter) EndStreamWithContent(ctx context.Context, incoming *im.IncomingMessage, streamID string, finalContent string) error {
+	return a.client.EndStreamWithContent(ctx, incoming, streamID, finalContent)
 }
 
 // ── FileDownloader implementation ──

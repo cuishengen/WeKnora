@@ -2009,7 +2009,7 @@ func (s *Service) executeQARequest(req *qaRequest) {
 	}
 
 	// Determine output mode from channel config.
-	streamDisabled := req.channel.OutputMode == "full" || isCompanyIM(req.channel)
+	streamDisabled := req.channel.OutputMode == "full" || (isCompanyIM(req.channel) && req.channel.OutputMode != "stream")
 
 	if streamDisabled {
 		if progressSender, ok := req.adapter.(FullOutputProgressSender); ok &&
@@ -2549,16 +2549,36 @@ func briefToolSummary(output string) string {
 // in real-time via the StreamSender interface. Chunks are batched at streamFlushInterval
 // to avoid API rate-limiting.
 func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage, session *types.Session, customAgent *types.CustomAgent, kbIDs []string, attachments types.MessageAttachments, imageURLs []string, streamer StreamSender, adapter Adapter, userKey string, tenant *types.Tenant) error {
+	_, companyStream := ctx.Value(companyIMContextKey{}).(companyIMSubject)
+	if companyStream {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, companyStreamTimeout)
+		defer cancel()
+	}
 	// Start the stream on the IM platform (e.g., create Feishu streaming card)
 	streamID, err := streamer.StartStream(ctx, msg)
 	if err != nil {
 		logger.Warnf(ctx, "[IM] StartStream failed, falling back to non-streaming: %v", err)
 		return s.fallbackNonStream(ctx, msg, session, customAgent, kbIDs, attachments, imageURLs, adapter, userKey, tenant)
 	}
+	streamStarted := time.Now()
+	if companyStream {
+		authorizedCtx, authErr := s.authorizeIMAnswer(ctx, msg)
+		if authErr != nil {
+			_, _, _ = s.finishCompanyIMStream(ctx, msg, streamer, adapter, streamID, companyStreamDenied)
+			return authErr
+		}
+		ctx = authorizedCtx
+		// WeCom StartStream only allocates a local buffer. This first actual
+		// frame acknowledges the question before any database or model work.
+		if err := streamer.UpdateStreamContent(ctx, msg, streamID, "已收到，正在处理…"); err != nil {
+			logger.Warnf(ctx, "[IM] Initial company progress update failed: %v", err)
+		}
+	}
 
 	// Prepare the QA pipeline
-	// No total deadline: each agent round has its own LLMCallTimeout (default 120s).
-	// A hard pipeline deadline would kill multi-round agent reasoning prematurely.
+	// Other IM platforms keep their per-round LLM timeout. Company streams have
+	// a total budget above so the WeCom reply channel always receives an end.
 	qaCtx, qaCancel := context.WithCancel(ctx)
 	defer qaCancel()
 
@@ -2594,6 +2614,8 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		// authorization (IM cannot resolve the in-conversation prompt).
 		mcpAuthServices []imMCPAuthService
 		mcpAuthSeen     = make(map[string]bool)
+		companyStage    = "已收到，正在处理…"
+		companyAnswerID string
 	)
 	closeDone := func() { closeOnce.Do(func() { close(done) }) }
 	closeComplete := func() { completeOnce.Do(func() { close(completeDone) }) }
@@ -2649,6 +2671,23 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		}
 
 		bufMu.Lock()
+		if companyStream {
+			// Only the producer's public answer channel is displayed. A tool
+			// call or explicit retry/retraction replaces this provisional text.
+			if companyAnswerID != "" && evt.ID != companyAnswerID && (data.Replace || data.Done && data.Content == "") {
+				bufMu.Unlock()
+				return nil
+			}
+			if data.Replace || (data.Content != "" && companyAnswerID != "" && evt.ID != "" && evt.ID != companyAnswerID) {
+				agentLiveAnswer.Reset()
+				answerOuter.Reset()
+				answerBuilder.Reset()
+			}
+			if evt.ID != "" {
+				companyAnswerID = evt.ID
+			}
+			companyStage = "正在生成回答…"
+		}
 		if useAgent && !agentDone {
 			if data.Content != "" {
 				agentLiveAnswer.WriteString(data.Content)
@@ -2661,7 +2700,7 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		}
 		bufMu.Unlock()
 
-		if data.Done {
+		if data.Done && !(companyStream && useAgent) {
 			closeDone()
 		}
 		return nil
@@ -2705,6 +2744,13 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		agentDone = true
 		agentCompleteFinalAnswer = data.FinalAnswer
 		applyIMCompleteDataToMessage(assistantMsg, data)
+		if companyStream && strings.TrimSpace(data.FinalAnswer) != "" {
+			// Complete is authoritative; a retry or provider reset may have
+			// superseded every earlier answer event.
+			answerBuilder.Reset()
+			answerOuter.Reset()
+			agentLiveAnswer.Reset()
+		}
 		mergeIMAgentAnswerBuffers(&answerBuilder, &answerOuter, &agentLiveAnswer, data.FinalAnswer)
 		bufMu.Unlock()
 		closeComplete()
@@ -2715,6 +2761,9 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 
 	// Subscribe to agent thought events — stream thinking content into <think> block
 	eventBus.On(event.EventAgentThought, func(_ context.Context, evt event.Event) error {
+		if companyStream {
+			return nil
+		}
 		data, ok := evt.Data.(event.AgentThoughtData)
 		if !ok {
 			return nil
@@ -2733,6 +2782,15 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	eventBus.On(event.EventAgentToolCall, func(_ context.Context, evt event.Event) error {
 		data, ok := evt.Data.(event.AgentToolCallData)
 		if !ok {
+			return nil
+		}
+		if companyStream {
+			bufMu.Lock()
+			companyStage = companyStreamToolStage(data.ToolName)
+			// A tool call makes this round's optimistic answer a preamble,
+			// including internal thinking/todo tools. Never relocate it to UI.
+			agentLiveAnswer.Reset()
+			bufMu.Unlock()
 			return nil
 		}
 		if !isToolVisibleToUser(data.ToolName) {
@@ -2777,6 +2835,12 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	eventBus.On(event.EventAgentToolResult, func(_ context.Context, evt event.Event) error {
 		data, ok := evt.Data.(event.AgentToolResultData)
 		if !ok {
+			return nil
+		}
+		if companyStream {
+			bufMu.Lock()
+			companyStage = "正在核对资料并整理回答…"
+			bufMu.Unlock()
 			return nil
 		}
 		if !isToolVisibleToUser(data.ToolName) {
@@ -2831,12 +2895,18 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	// Create user message
 	userMsg, err := s.messageService.CreateMessage(qaCtx, createIMUserMessagePayload(session.ID, msg.Content, requestID, attachments))
 	if err != nil {
+		if companyStream {
+			_, _, _ = s.finishCompanyIMStream(ctx, msg, streamer, adapter, streamID, companyStreamFailure(err))
+		}
 		return fmt.Errorf("create user message: %w", err)
 	}
 
 	// Create placeholder assistant message
 	assistantMsg, err = s.messageService.CreateMessage(qaCtx, createIMAssistantMessagePayload(session.ID, requestID))
 	if err != nil {
+		if companyStream {
+			_, _, _ = s.finishCompanyIMStream(ctx, msg, streamer, adapter, streamID, companyStreamFailure(err))
+		}
 		return fmt.Errorf("create assistant message: %w", err)
 	}
 
@@ -2888,18 +2958,31 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	// Flush loop: periodically send buffered content to the IM platform.
 	// A holdback mechanism prevents flushing incomplete provider:// URLs or
 	// XML tags that straddle a chunk boundary (see holdbackCutoff).
-	ticker := time.NewTicker(streamFlushInterval)
+	flushInterval := streamFlushInterval
+	if companyStream {
+		flushInterval = companyStreamInterval
+	}
+	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 	fileResolver := s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs)
+	lastCompanyDisplay := "已收到，正在处理…"
 
 	flush := func() {
 		bufMu.Lock()
 		parts := getStreamParts()
 		agentRunning := useAgent && !agentDone
+		stage := companyStage
 		bufMu.Unlock()
 
 		displaySource := FormatIMIntermediateFromParts(parts, agentRunning)
-		if displaySource == "" {
+		if companyStream {
+			// No thought/tool formatting is used in a company reply. Feed
+			// without Flush also holds a split inline thinking-tag prefix.
+			displaySource = pickIMStoredAnswer(parts.Answer, parts.LiveAnswer)
+			_, displaySource = agenttools.NewThinkStreamSplitter().Feed(displaySource)
+			displaySource = companyStreamHoldback(displaySource)
+		}
+		if displaySource == "" && !companyStream {
 			return
 		}
 
@@ -2907,9 +2990,31 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 			displaySource = displaySource[:cut]
 		}
 
-		display := cleanIMContent(ctx, displaySource, fileResolver)
-		if err := streamer.UpdateStreamContent(ctx, msg, streamID, display); err != nil {
+		outCtx := ctx
+		if companyStream {
+			displaySource = companyStreamDisplay(stage, displaySource, time.Since(streamStarted))
+			displaySource = companyStreamLimit(cleanIMContent(ctx, displaySource, fileResolver))
+			if displaySource == lastCompanyDisplay {
+				return
+			}
+			var authErr error
+			outCtx, authErr = s.authorizeIMAnswer(ctx, msg)
+			if authErr != nil {
+				bufMu.Lock()
+				qaErr = authErr
+				bufMu.Unlock()
+				qaCancel()
+				return
+			}
+		}
+		display := displaySource
+		if !companyStream {
+			display = cleanIMContent(outCtx, displaySource, fileResolver)
+		}
+		if err := streamer.UpdateStreamContent(outCtx, msg, streamID, display); err != nil {
 			logger.Warnf(ctx, "[IM] UpdateStreamContent failed: %v", err)
+		} else if companyStream {
+			lastCompanyDisplay = displaySource
 		}
 	}
 
@@ -2942,9 +3047,29 @@ loop:
 	}
 	answer := resolvedAnswer
 	finalErr := qaErr
+	if companyStream && finalErr == nil {
+		finalErr = qaCtx.Err()
+	}
 	noVisibleContent := !streamedAny && strings.TrimSpace(resolvedAnswer) == ""
 	authServices := append([]imMCPAuthService(nil), mcpAuthServices...)
 	bufMu.Unlock()
+	if companyStream {
+		answer = agenttools.StripThinkBlocks(answer)
+		if finalErr != nil {
+			answer = companyStreamFailure(finalErr)
+		}
+		finalDisplay := formatIMOutboundAnswerOrFallback(imOutboundContext(ctx), answer, fileResolver)
+		finalAnswer, delivered, deliveryErr := s.finishCompanyIMStream(ctx, msg, streamer, adapter, streamID, finalDisplay)
+		assistantMsg.Content = finalAnswer
+		assistantMsg.IsCompleted = true
+		if err := s.messageService.UpdateMessage(imOutboundContext(ctx), assistantMsg); err != nil {
+			logger.Warnf(ctx, "[IM] Failed to update company assistant message: %v", err)
+		}
+		if delivered && finalErr == nil && deliveryErr == nil {
+			s.sendOriginalFiles(imOutboundContext(ctx), msg, adapter, customAgent, kbIDs, answer)
+		}
+		return deliveryErr
+	}
 
 	outCtx := imOutboundContext(ctx)
 	finalDisplay := cleanIMContent(outCtx, FormatIMFinalFromParts(parts), fileResolver)
@@ -3006,10 +3131,17 @@ loop:
 
 // fallbackNonStream is used when streaming initialization fails.
 func (s *Service) fallbackNonStream(ctx context.Context, msg *IncomingMessage, session *types.Session, customAgent *types.CustomAgent, kbIDs []string, attachments types.MessageAttachments, imageURLs []string, adapter Adapter, userKey string, tenant *types.Tenant) error {
+	_, companyStream := ctx.Value(companyIMContextKey{}).(companyIMSubject)
 	answer, err := s.runQA(ctx, session, msg.Content, customAgent, kbIDs, attachments, imageURLs, userKey, msg.Quote)
 	if err != nil {
 		logger.Errorf(ctx, "[IM] QA fallback failed: %v", err)
 		answer = imQAFailureReply(err)
+	}
+	if companyStream {
+		answer = agenttools.StripThinkBlocks(answer)
+		if err != nil {
+			answer = companyStreamFailure(err)
+		}
 	}
 
 	outCtx := imOutboundContext(ctx)
@@ -3017,9 +3149,13 @@ func (s *Service) fallbackNonStream(ctx context.Context, msg *IncomingMessage, s
 	if authErr != nil {
 		return authErr
 	}
+	content := formatIMOutboundAnswerOrFallback(outCtx, answer,
+		s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs))
+	if companyStream {
+		content = companyStreamLimit(content)
+	}
 	sendErr := adapter.SendReply(outCtx, msg, &ReplyMessage{
-		Content: formatIMOutboundAnswerOrFallback(outCtx, answer,
-			s.newOutboundFileServiceResolver(tenant, customAgent, kbIDs)),
+		Content: content,
 		IsFinal: true,
 	})
 	if err == nil && sendErr == nil {
@@ -3191,6 +3327,9 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	case <-ctx.Done():
 		// Mark assistant message as completed to avoid dangling incomplete records
 		assistantMsg.Content = imCancelledFallback
+		if _, company := ctx.Value(companyIMContextKey{}).(companyIMSubject); company {
+			assistantMsg.Content = companyStreamFailure(ctx.Err())
+		}
 		assistantMsg.IsCompleted = true
 		// Use a fresh context since the original is cancelled
 		if updateErr := s.messageService.UpdateMessage(context.WithoutCancel(ctx), assistantMsg); updateErr != nil {
@@ -3204,6 +3343,16 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	qaError := qaErr
 	authServices := append([]imMCPAuthService(nil), mcpAuthServices...)
 	answerMu.Unlock()
+	_, company := ctx.Value(companyIMContextKey{}).(companyIMSubject)
+	if company {
+		answer = agenttools.StripThinkBlocks(answer)
+		if qaError == nil {
+			qaError = ctx.Err()
+		}
+		if qaError != nil {
+			answer = companyStreamFailure(qaError)
+		}
+	}
 
 	if answer == "" && qaError != nil {
 		return "", qaError
@@ -3223,6 +3372,9 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	}
 
 	// Return raw answer — callers apply cleanIMContent with the appropriate FileService.
+	if company {
+		return answer, qaError
+	}
 	return answer, nil
 }
 

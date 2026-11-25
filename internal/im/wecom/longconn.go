@@ -312,12 +312,25 @@ func (c *LongConnClient) SendStreamChunk(ctx context.Context, incoming *im.Incom
 // EndStream sends the final frame with the full accumulated content and cleans up.
 // It retries briefly if the connection is temporarily unavailable during a reconnect.
 func (c *LongConnClient) EndStream(ctx context.Context, incoming *im.IncomingMessage, streamID string) error {
+	return c.endStream(ctx, incoming, streamID, nil)
+}
+
+// EndStreamWithContent removes the old cache and sends only the caller's
+// freshly authorized final body, including when a previous replace failed.
+func (c *LongConnClient) EndStreamWithContent(ctx context.Context, incoming *im.IncomingMessage, streamID string, finalContent string) error {
+	return c.endStream(ctx, incoming, streamID, &finalContent)
+}
+
+func (c *LongConnClient) endStream(ctx context.Context, incoming *im.IncomingMessage, streamID string, finalContent *string) error {
 	c.streamBufsMu.Lock()
 	buf, ok := c.streamBufs[streamID]
 	var fullContent string
 	if ok {
 		fullContent = buf.String()
 		delete(c.streamBufs, streamID)
+	}
+	if finalContent != nil {
+		fullContent = *finalContent
 	}
 	c.streamBufsMu.Unlock()
 

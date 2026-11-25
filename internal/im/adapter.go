@@ -163,6 +163,12 @@ type StreamSender interface {
 	EndStream(ctx context.Context, incoming *IncomingMessage, streamID string) error
 }
 
+// StreamFinalContentSender can end a stream with the supplied final body,
+// atomically discarding any previously cached body even if a replace failed.
+type StreamFinalContentSender interface {
+	EndStreamWithContent(ctx context.Context, incoming *IncomingMessage, streamID string, finalContent string) error
+}
+
 // FullOutputProgressSender is an optional capability for adapters whose stream
 // starts with a visible placeholder that can safely be replaced once with the
 // completed answer. Full output never calls UpdateStreamContent.
