@@ -2144,6 +2144,9 @@ class PDFScannedParser(BaseParser):
                 metadata={
                     "image_source_type": "scanned_pdf",
                     "page_count": page_count,
+                    "scanned_page_count": page_count,
+                    "text_page_count": 0,
+                    "text_content_chars": 0,
                 },
                 source_blocks=source_blocks,
             )
@@ -2184,7 +2187,13 @@ class PDFScannedParser(BaseParser):
 
         document = Document(
             content="\n\n".join(markdown_lines),
-            metadata={"image_source_type": "scanned_pdf", "page_count": page_count},
+            metadata={
+                "image_source_type": "scanned_pdf",
+                "page_count": page_count,
+                "scanned_page_count": page_count,
+                "text_page_count": 0,
+                "text_content_chars": 0,
+            },
             source_blocks=source_blocks,
         )
         image_count = page_count
@@ -2358,6 +2367,7 @@ class PDFParser(BaseParser):
 
             # Pass 1: cheap text extraction + image-area classification.
             texts: list = []
+            native_texts: list = []
             classes: list = []
             vector_clips: dict = {}
             line_boxes: dict = {}
@@ -2398,6 +2408,13 @@ class PDFParser(BaseParser):
                                 text = plain
                     else:
                         text = plain
+                    text = _postprocess_pdf_text(text)
+                    if cls == "text" and not text.strip() and \
+                            _page_has_visible_graphics(page, pdfium_r):
+                        # A hidden OCR layer can make a vector-only page look
+                        # like native text before filtering. Render its visible
+                        # content instead of restoring the hidden text layer.
+                        cls = "scanned"
                     if cls == "text":
                         clips = _extract_vector_figure_clips(
                             page,
@@ -2413,9 +2430,9 @@ class PDFParser(BaseParser):
                             vector_clips[i] = clips
                             for ref_path, b64, _y, _cap in clips:
                                 images[ref_path] = b64
-                    text = _postprocess_pdf_text(text)
                     if cls == "text" and SOURCE_BOXES:
                         line_boxes[i] = _page_line_boxes(page, pdfium_r)
+                    native_texts.append(text if cls == "text" else "")
                     if cls == "text" and vector_clips.get(i):
                         text = _inject_figure_markdown_before_captions(
                             text, vector_clips[i]
@@ -2426,6 +2443,7 @@ class PDFParser(BaseParser):
                 classes.append(cls)
 
             texts = _strip_repeating_lines(texts, classes)
+            native_texts = _strip_repeating_lines(native_texts, classes)
             scanned_indices = [i for i, c in enumerate(classes) if c == "scanned"]
 
             # Pass 2: render only the scanned pages (heavy work, rate-limited).
@@ -2519,6 +2537,9 @@ class PDFParser(BaseParser):
             "embedded_image_count": embedded_count,
             "vector_figure_count": vector_figure_count,
             "image_source_type": "scanned_pdf" if scanned_indices else "pdf_text_layer",
+            "text_content_chars": sum(
+                len(text.strip()) for text in native_texts
+            ),
         }
         if not content_text and not images and not scanned_indices:
             # A successfully loaded PDF with no usable page content is a

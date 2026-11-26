@@ -41,6 +41,20 @@ func TestNASOnlyTypedContentFailureAllowsFollowingDocument(t *testing.T) {
 		require.Equal(t, 1, result.Created)
 		require.Equal(t, 1, h.nonBlockingFailures)
 	})
+	t.Run("recognition deferred", func(t *testing.T) {
+		sink := &nasStagingSink{err: &datasource.DocumentParseDeferred{Reason: visionDisabledReason}}
+		result := &types.SyncResult{}
+		h := &streamSyncHandler{svc: &DataSourceService{knowledgeService: sink}, ds: ds, result: result}
+		var deferred *datasource.DocumentParseDeferred
+		require.ErrorAs(t, h.Emit(context.Background(), item), &deferred)
+		require.Nil(t, h.ingestErr)
+		require.Equal(t, 0, result.Failed)
+		require.Equal(t, 1, result.Skipped)
+		require.Empty(t, result.Errors)
+		sink.err = nil
+		require.NoError(t, h.Emit(context.Background(), item))
+		require.Equal(t, 1, result.Created)
+	})
 	for _, err := range []error{errors.New("quota exhausted"), errors.New("ACL changed"),
 		errors.New("enqueue failed"), errors.New("database unavailable"), ErrInvalidFileType, context.Canceled} {
 		t.Run(err.Error(), func(t *testing.T) {

@@ -225,14 +225,26 @@ func (c *Connector) FetchFullStream(ctx context.Context, ds *types.DataSourceCon
 }
 
 type syncState struct {
-	Inventory      map[string]int    `json:"inventory,omitempty"`
-	Version        int               `json:"version"`
-	Binding        string            `json:"binding"`
-	Files          map[string]string `json:"files"`
-	Failed         map[string]string `json:"failed"`
-	Excluded       map[string]string `json:"excluded"`
-	ExcludedCounts map[string]int    `json:"excluded_counts"`
-	ScanComplete   bool              `json:"scan_complete"`
+	Inventory      map[string]int           `json:"inventory,omitempty"`
+	Version        int                      `json:"version"`
+	Binding        string                   `json:"binding"`
+	Files          map[string]string        `json:"files"`
+	Failed         map[string]string        `json:"failed"`
+	FailedAttempts map[string]failedAttempt `json:"failed_attempts,omitempty"`
+	Deferred       map[string]deferredItem  `json:"deferred,omitempty"`
+	Excluded       map[string]string        `json:"excluded"`
+	ExcludedCounts map[string]int           `json:"excluded_counts"`
+	ScanComplete   bool                     `json:"scan_complete"`
+}
+
+type failedAttempt struct {
+	SHA256 string `json:"sha256"`
+	RunID  string `json:"run_id"`
+}
+
+type deferredItem struct {
+	SHA256 string `json:"sha256"`
+	Reason string `json:"reason"`
 }
 
 func digest(b []byte) string { sum := sha256.Sum256(b); return hex.EncodeToString(sum[:]) }
@@ -289,6 +301,13 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 	if state.Failed == nil {
 		state.Failed = make(map[string]string)
 	}
+	if state.FailedAttempts == nil {
+		state.FailedAttempts = make(map[string]failedAttempt)
+	}
+	if state.Deferred == nil {
+		state.Deferred = make(map[string]deferredItem)
+	}
+	runID := datasource.SyncRunID(ctx)
 	state.Excluded = make(map[string]string)
 	state.ExcludedCounts = make(map[string]int)
 	state.ScanComplete = false
@@ -402,7 +421,22 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 		}
 		if !full && state.Files[e.rel] == hash {
 			delete(state.Failed, e.rel)
+			delete(state.FailedAttempts, e.rel)
+			delete(state.Deferred, e.rel)
 			continue
+		}
+		if !full && !datasource.VisionEnabled(ctx) && state.Deferred[e.rel].SHA256 == hash {
+			// This version still needs image recognition, which is disabled.
+			// Keep it visible as deferred without creating another candidate.
+			continue
+		}
+		if attempt, found := state.FailedAttempts[e.rel]; found && runID != "" &&
+			attempt.RunID == runID && attempt.SHA256 == hash {
+			if _, stillFailed := state.Failed[e.rel]; stillFailed {
+				// A continuation restarts the scan, but must not parse and count
+				// this rejected version again within the same sync log.
+				continue
+			}
 		}
 		if err := s.healthy(); err != nil {
 			return nil, err
@@ -412,13 +446,33 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 			item = referenceItem(cfg, e, hash)
 		}
 		if err := h.Emit(ctx, item); err != nil {
+			var deferred *datasource.DocumentParseDeferred
+			if errors.As(err, &deferred) {
+				state.Deferred[e.rel] = deferredItem{SHA256: hash, Reason: deferred.Reason}
+				delete(state.Failed, e.rel)
+				delete(state.FailedAttempts, e.rel)
+				checkpoint, cursorErr := state.cursor(lastComplete)
+				if cursorErr != nil {
+					return nil, cursorErr
+				}
+				if err := h.Checkpoint(ctx, checkpoint); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			var rejected *datasource.DocumentParseFailure
 			if !errors.As(err, &rejected) {
 				return nil, err
 			}
 			// Only an explicit content rejection may continue. Keep the last
-			// published hash, so this document is retried on the next scan.
+			// published hash and retry on a new run or when the bytes change.
 			state.Failed[e.rel] = rejected.Reason
+			delete(state.Deferred, e.rel)
+			if runID != "" {
+				state.FailedAttempts[e.rel] = failedAttempt{SHA256: hash, RunID: runID}
+			} else {
+				delete(state.FailedAttempts, e.rel)
+			}
 			checkpoint, cursorErr := state.cursor(lastComplete)
 			if cursorErr != nil {
 				return nil, cursorErr
@@ -431,6 +485,8 @@ func (c *Connector) sync(ctx context.Context, ds *types.DataSourceConfig, old *t
 		// Emit must confirm ingestion success before this document is acknowledged.
 		state.Files[e.rel] = hash
 		delete(state.Failed, e.rel)
+		delete(state.FailedAttempts, e.rel)
+		delete(state.Deferred, e.rel)
 		checkpoint, err := state.cursor(lastComplete)
 		if err != nil {
 			return nil, err

@@ -92,6 +92,56 @@ func TestNASListKeepsProgressWithoutFileCursor(t *testing.T) {
 	assert.Contains(t, string(body), `"source_progress"`)
 }
 
+func TestNASListSeparatesDeferredAndExcludedFromCompleted(t *testing.T) {
+	ds := &types.DataSource{Type: types.ConnectorTypeDokuWikiFilesystem,
+		LastSyncCursor: types.JSON(`{"connector_cursor":{"inventory":{"source_files":8,"images":3,"attachments":1},"files":{"pages/a.txt":"hash","media/a.zip":"hash"},"failed":{"media/b.pdf":"reason"},"deferred":{"media/c.pdf":{"sha256":"hash","reason":"vision_disabled"}},"excluded":{"media/a.PNG":"file_type_not_selected","media/b.jpg":"file_type_not_selected","media/c.webp":"file_type_not_selected","pages/empty.txt":"empty_page_not_parsed"},"excluded_counts":{"file_type_not_selected":3,"empty_page_not_parsed":1},"scan_complete":true}}`)}
+	response := NewDataSourceResponses([]*types.DataSource{ds})[0]
+	progress := response.SourceProgress
+	assert.Equal(t, 8, progress.Total)
+	assert.Equal(t, 2, progress.Completed)
+	assert.Equal(t, 1, progress.Failed)
+	assert.Equal(t, 1, progress.Deferred)
+	assert.Equal(t, 4, progress.Excluded)
+	assert.Equal(t, 3, progress.ExcludedImages)
+	// An old usable publication is retained when the current source version
+	// fails or awaits recognition; do not count that path as current success.
+	var stored map[string]interface{}
+	assert.NoError(t, json.Unmarshal(ds.LastSyncCursor, &stored))
+	files := stored["connector_cursor"].(map[string]interface{})["files"].(map[string]interface{})
+	files["media/b.pdf"], files["media/c.pdf"] = "previous-hash", "previous-hash"
+	encoded, err := json.Marshal(stored)
+	assert.NoError(t, err)
+	ds.LastSyncCursor = types.JSON(encoded)
+	assert.Equal(t, 2, NewDataSourceResponse(ds).SourceProgress.Completed)
+	assert.NotNil(t, progress.ScanComplete)
+	assert.True(t, *progress.ScanComplete)
+	body, err := json.Marshal(response)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(body), "media/c.pdf")
+	assert.NotContains(t, string(body), "vision_disabled")
+	assert.Contains(t, string(body), `"scan_complete":true`)
+}
+
+func TestNASProgressPreservesIncompleteAndLegacyScanState(t *testing.T) {
+	for _, scan := range []string{"", `,"scan_complete":false`} {
+		ds := &types.DataSource{Type: types.ConnectorTypeDokuWikiFilesystem,
+			LastSyncCursor: types.JSON(`{"connector_cursor":{"inventory":{"source_files":1},"files":{},"failed":{}` + scan + `}}`)}
+		response := NewDataSourceResponse(ds)
+		assert.Zero(t, response.SourceProgress.Deferred)
+		body, err := json.Marshal(response)
+		assert.NoError(t, err)
+		if scan == "" {
+			assert.Nil(t, response.SourceProgress.ScanComplete)
+			assert.NotContains(t, string(body), `"scan_complete"`)
+		} else {
+			assert.NotNil(t, response.SourceProgress.ScanComplete)
+			assert.False(t, *response.SourceProgress.ScanComplete)
+			assert.Contains(t, string(body), `"scan_complete":false`)
+		}
+	}
+	assert.Nil(t, NewDataSourceResponse(&types.DataSource{Type: types.ConnectorTypeRSS}).SourceProgress)
+}
+
 func TestDataSourceResponse_RSSFeedURLsFromCredentials(t *testing.T) {
 	cfg := types.DataSourceConfig{
 		Type: types.ConnectorTypeRSS,

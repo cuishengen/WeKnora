@@ -68,10 +68,11 @@ func TestNASResumeCompletedCandidateRechecksSourceBeforePublication(t *testing.T
 }
 
 type immediateStagedParser struct {
-	t       *testing.T
-	repo    interfaces.KnowledgeRepository
-	oldID   string
-	created string
+	t        *testing.T
+	repo     interfaces.KnowledgeRepository
+	oldID    string
+	created  string
+	deferred bool
 }
 
 func (q *immediateStagedParser) Enqueue(task *asynq.Task, _ ...asynq.Option) (*asynq.TaskInfo, error) {
@@ -85,6 +86,10 @@ func (q *immediateStagedParser) Enqueue(task *asynq.Task, _ ...asynq.Option) (*a
 		require.True(q.t, row.IsStaged)
 		now := time.Now()
 		row.ParseStatus, row.EnableStatus, row.ProcessedAt, row.StorageSize = types.ParseStatusCompleted, "enabled", &now, 10
+		if q.deferred {
+			row.ParseStatus = types.ParseStatusFailed
+			row.ErrorMessage = stagedVisionDeferredPrefix + visionDisabledReason
+		}
 		require.NoError(q.t, q.repo.UpdateKnowledge(context.Background(), row))
 		q.created = row.ID
 	}
@@ -120,4 +125,23 @@ func TestNASEmptyIndexIsDocumentFailureAndKeepsOldPublication(t *testing.T) {
 	_, err = h.svc.repo.GetKnowledgeByID(h.ctx, 7, h.original.ID)
 	require.NoError(t, err)
 	require.Empty(t, h.store.deleted)
+}
+
+func TestNASRecognitionDeferredKeepsPreviousPublicationAndDoesNotPublishCandidate(t *testing.T) {
+	h, ds, candidate, metadata := readyNASCandidate(t)
+	require.NoError(t, h.svc.repo.UpdateKnowledgeColumn(h.ctx, candidate.ID, "parse_status", types.ParseStatusFailed))
+	parser := &immediateStagedParser{t: t, repo: h.svc.repo, oldID: h.original.ID, deferred: true}
+	h.svc.task = parser
+	_, err := h.svc.StageDataSourceKnowledge(h.ctx, ds,
+		&types.FetchedItem{ExternalID: "doc-1", FileName: "doc.pdf", Content: []byte("new")}, metadata, nil, ds.Type,
+		func(context.Context) error { t.Fatal("unrecognized content must not publish"); return nil })
+	var deferred *datasource.DocumentParseDeferred
+	require.ErrorAs(t, err, &deferred)
+	previous, err := h.svc.repo.GetKnowledgeByID(h.ctx, 7, h.original.ID)
+	require.NoError(t, err)
+	require.False(t, previous.IsStaged)
+	pending, err := h.svc.repo.GetKnowledgeByID(h.ctx, 7, parser.created)
+	require.NoError(t, err)
+	require.True(t, pending.IsStaged)
+	require.Equal(t, types.ParseStatusFailed, pending.ParseStatus)
 }

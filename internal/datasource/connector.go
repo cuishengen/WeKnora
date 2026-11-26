@@ -74,6 +74,32 @@ type StreamHandler interface {
 	Checkpoint(ctx context.Context, cursor *types.SyncCursor) error
 }
 
+type syncRunIDKey struct{}
+type visionEnabledKey struct{}
+
+// WithSyncRunID identifies one server-owned sync log across worker continuations.
+// It is runtime context, not part of the connector's user-supplied configuration.
+func WithSyncRunID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, syncRunIDKey{}, id)
+}
+
+// SyncRunID is empty for callers that do not provide a persistent sync run.
+func SyncRunID(ctx context.Context) string {
+	id, _ := ctx.Value(syncRunIDKey{}).(string)
+	return id
+}
+
+// WithVisionEnabled carries the knowledge base's server-resolved vision policy.
+func WithVisionEnabled(ctx context.Context, enabled bool) context.Context {
+	return context.WithValue(ctx, visionEnabledKey{}, enabled)
+}
+
+// VisionEnabled reports whether this sync may retry image-only deferred content.
+func VisionEnabled(ctx context.Context) bool {
+	enabled, _ := ctx.Value(visionEnabledKey{}).(bool)
+	return enabled
+}
+
 // StreamingConnector is an optional interface. Connectors that implement it let
 // the service interleave fetch→ingest→checkpoint so a large sync persists
 // incrementally and resumes after a timeout, rather than holding every item in

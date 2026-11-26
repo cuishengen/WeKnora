@@ -48,13 +48,17 @@ type DataSourceResponse struct {
 
 // DataSourceProgress keeps list polling small while exposing durable scan counts.
 type DataSourceProgress struct {
-	Total          int `json:"total"`
-	Completed      int `json:"completed"`
-	Images         int `json:"images"`
-	ImageDone      int `json:"image_done"`
-	Attachments    int `json:"attachments"`
-	AttachmentDone int `json:"attachment_done"`
-	Failed         int `json:"failed"`
+	Total          int   `json:"total"`
+	Completed      int   `json:"completed"`
+	Images         int   `json:"images"`
+	ImageDone      int   `json:"image_done"`
+	Attachments    int   `json:"attachments"`
+	AttachmentDone int   `json:"attachment_done"`
+	Failed         int   `json:"failed"`
+	Deferred       int   `json:"deferred"`
+	Excluded       int   `json:"excluded"`
+	ExcludedImages int   `json:"excluded_images"`
+	ScanComplete   *bool `json:"scan_complete,omitempty"`
 }
 
 func sourceProgress(ds *types.DataSource) *DataSourceProgress {
@@ -68,8 +72,12 @@ func sourceProgress(ds *types.DataSource) *DataSourceProgress {
 				Images      int `json:"images"`
 				Attachments int `json:"attachments"`
 			} `json:"inventory"`
-			Files  map[string]json.RawMessage `json:"files"`
-			Failed map[string]json.RawMessage `json:"failed"`
+			Files          map[string]json.RawMessage `json:"files"`
+			Failed         map[string]json.RawMessage `json:"failed"`
+			Deferred       map[string]json.RawMessage `json:"deferred"`
+			Excluded       map[string]string          `json:"excluded"`
+			ExcludedCounts map[string]int             `json:"excluded_counts"`
+			ScanComplete   *bool                      `json:"scan_complete"`
 		} `json:"connector_cursor"`
 	}
 	if json.Unmarshal(ds.LastSyncCursor, &cursor) != nil || cursor.Connector.Inventory == nil {
@@ -77,8 +85,30 @@ func sourceProgress(ds *types.DataSource) *DataSourceProgress {
 	}
 	c := cursor.Connector
 	progress := &DataSourceProgress{Total: c.Inventory.Total, Images: c.Inventory.Images,
-		Attachments: c.Inventory.Attachments, Completed: len(c.Files), Failed: len(c.Failed)}
+		Attachments: c.Inventory.Attachments, Failed: len(c.Failed),
+		Deferred: len(c.Deferred), ScanComplete: c.ScanComplete}
+	for _, count := range c.ExcludedCounts {
+		if count > 0 {
+			progress.Excluded += count
+		}
+	}
+	for filename, reason := range c.Excluded {
+		if reason != "file_type_not_selected" {
+			continue
+		}
+		switch strings.ToLower(path.Ext(filename)) {
+		case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp":
+			progress.ExcludedImages++
+		}
+	}
 	for filename := range c.Files {
+		if _, failed := c.Failed[filename]; failed {
+			continue // The previous publication remains usable, but this version failed.
+		}
+		if _, deferred := c.Deferred[filename]; deferred {
+			continue
+		}
+		progress.Completed++
 		switch strings.ToLower(path.Ext(filename)) {
 		case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp":
 			progress.ImageDone++

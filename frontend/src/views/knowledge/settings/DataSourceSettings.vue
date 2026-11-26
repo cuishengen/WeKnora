@@ -37,7 +37,24 @@ const sourceProgress = (source: DataSource) => {
     images: progress?.images || 0, imageDone: progress?.image_done || 0,
     attachments: progress?.attachments || 0, attachmentDone: progress?.attachment_done || 0,
     failed: progress?.failed || 0,
+    deferred: progress?.deferred || 0, excluded: progress?.excluded || 0,
+    excludedImages: progress?.excluded_images || 0,
   }
+}
+
+function sourceProgressNotes(source: DataSource) {
+  const progress = sourceProgress(source)
+  const notes: string[] = []
+  if (source.source_progress?.scan_complete === true && !isSyncRunning(source)) {
+    notes.push(t('datasource.dokuwiki.scanComplete'))
+  }
+  if (progress.deferred > 0) notes.push(t('datasource.dokuwiki.deferred', { count: progress.deferred }))
+  if (progress.excludedImages > 0) {
+    notes.push(t('datasource.dokuwiki.imagesPaused', { count: progress.excludedImages }))
+  }
+  const otherExcluded = progress.excluded - progress.excludedImages
+  if (otherExcluded > 0) notes.push(t('datasource.dokuwiki.excluded', { count: otherExcluded }))
+  return notes.join(' · ')
 }
 const loading = ref(false)
 const editorVisible = ref(false)
@@ -180,6 +197,9 @@ function syncResultPills(ds: DataSource) {
 function lastSyncStatusLabel(ds: DataSource) {
   const log = ds.latest_sync_log
   if (!log) return '--'
+  if (log.status === 'success' && (ds.source_progress?.deferred || 0) > 0) {
+    return t('datasource.dokuwiki.syncCompleteDeferred')
+  }
   return t(`datasource.logStatus.${log.status}`)
 }
 
@@ -321,6 +341,9 @@ onBeforeUnmount(stopPolling)
             </p>
             <p v-if="ds.source_progress" class="ds-card__detail">
               {{ t('datasource.dokuwiki.inventory', sourceProgress(ds)) }}
+            </p>
+            <p v-if="sourceProgressNotes(ds)" class="ds-card__detail">
+              {{ sourceProgressNotes(ds) }}
             </p>
             <div v-if="ds.error_message" class="ds-card__error">
               <t-icon name="error-circle-filled" size="14px" />

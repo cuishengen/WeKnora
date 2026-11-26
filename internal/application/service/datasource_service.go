@@ -733,6 +733,10 @@ func (s *DataSourceService) processSync(ctx context.Context, task *asynq.Task) e
 	if err != nil {
 		return fmt.Errorf("%w: data source KB does not belong to its tenant", asynq.SkipRetry)
 	}
+	if ds.Type == types.ConnectorTypeDokuWikiFilesystem {
+		ctx = datasource.WithSyncRunID(ctx, syncLog.ID)
+		ctx = datasource.WithVisionEnabled(ctx, kb.IsMultimodalEnabled())
+	}
 	wasPaused := ds.Status == types.DataSourceStatusPaused
 
 	// Get connector
@@ -1062,6 +1066,9 @@ func (s *DataSourceService) applyFetchedItem(
 			// Duplicate file/URL is not a failure — count as skipped.
 			logger.Infof(ctx, "item %q (external_id=%s) already exists, skipping", item.Title, item.ExternalID)
 			result.Skipped++
+		case ds.Type == types.ConnectorTypeDokuWikiFilesystem && isDocumentRecognitionDeferred(err):
+			result.Skipped++
+			return false, err
 		case errors.Is(err, ErrInvalidFileType):
 			result.Failed++
 			recordSyncError(result, types.SyncItemError{
@@ -1193,6 +1200,9 @@ func (h *streamSyncHandler) Emit(ctx context.Context, item types.FetchedItem) er
 	h.result.Total++
 	nonBlocking, err := h.svc.applyFetchedItem(withKBActivitySuppressed(ctx), h.ds, &item, h.tagIDs, h.result)
 	if h.ds.Type == types.ConnectorTypeDokuWikiFilesystem && err != nil {
+		if isDocumentRecognitionDeferred(err) {
+			return err // Connector records pending recognition, never a successful SHA.
+		}
 		var rejected *datasource.DocumentParseFailure
 		if errors.As(err, &rejected) {
 			h.nonBlockingFailures++
@@ -1230,6 +1240,7 @@ func (h *streamSyncHandler) Checkpoint(ctx context.Context, cursor *types.SyncCu
 
 	// Best-effort live progress; a failure here must not abort the sync.
 	progress := mergedSyncResults(h.base, h.result)
+	reconcileNASFailures(h.ds, cursor, progress)
 	h.syncLog.ItemsTotal = progress.Total
 	h.syncLog.ItemsCreated = progress.Created
 	h.syncLog.ItemsUpdated = progress.Updated
@@ -1372,6 +1383,7 @@ func (s *DataSourceService) processSyncStreaming(
 		return fetchErr
 	}
 
+	reconcileNASFailures(ds, nextCursor, totalResult)
 	resultJSON, _ := totalResult.ToJSON()
 	if err := allFetchedItemsFailedError(result, handler.nonBlockingFailures); err != nil {
 		logger.Errorf(ctx, "streaming sync failed while processing fetched items: %v", err)

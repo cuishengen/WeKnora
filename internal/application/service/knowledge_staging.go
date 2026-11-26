@@ -99,6 +99,10 @@ func (s *knowledgeService) StageDataSourceKnowledge(ctx context.Context, ds *typ
 		}
 		switch candidate.ParseStatus {
 		case types.ParseStatusFailed, types.ParseStatusCancelled, types.ParseStatusDeleting:
+			if candidate.ParseStatus == types.ParseStatusFailed && strings.HasPrefix(candidate.ErrorMessage, stagedVisionDeferredPrefix) {
+				return false, &datasource.DocumentParseDeferred{
+					Reason: strings.TrimPrefix(candidate.ErrorMessage, stagedVisionDeferredPrefix)}
+			}
 			if candidate.ParseStatus == types.ParseStatusFailed && strings.HasPrefix(candidate.ErrorMessage, stagedDocumentRejectionPrefix) {
 				return false, &datasource.DocumentParseFailure{KnowledgeID: candidate.ID,
 					Reason: strings.TrimPrefix(candidate.ErrorMessage, stagedDocumentRejectionPrefix)}

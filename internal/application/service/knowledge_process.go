@@ -3878,6 +3878,10 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 
 	processOverrides, _ := knowledge.ProcessOverrides()
 	eff := ResolveProcessConfig(kb, processOverrides)
+	if knowledge.IsStaged && knowledge.Channel == types.ConnectorTypeDokuWikiFilesystem {
+		// A queued source task must respect a subsequently disabled KB capability.
+		payload.EnableMultimodel = payload.EnableMultimodel && eff.EnableMultimodel
+	}
 
 	// Re-check abort status right before flipping to "processing" — closes
 	// the race where the user cancels between the entry guard above and
@@ -4139,6 +4143,15 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 	// breaks are plain LF.
 	// Source blocks were recorded against the parser's markdown; keep it so
 	// they can be re-aimed after the rewrites below.
+	if needsDeferredPDFRecognition(knowledge, payload, convertResult) {
+		knowledge.ParseStatus = types.ParseStatusFailed
+		knowledge.ErrorMessage = stagedVisionDeferredPrefix + visionDisabledReason
+		knowledge.UpdatedAt = time.Now()
+		if err := s.updateKnowledgeUnlessSourceReplaced(ctx, knowledge); err != nil {
+			return err
+		}
+		return nil
+	}
 	var parsedMarkdown string
 	var sourceBlocks []types.SourceBlock
 	if convertResult != nil {

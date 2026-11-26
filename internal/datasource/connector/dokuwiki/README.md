@@ -77,13 +77,25 @@ hashed but is not emitted or reparsed. A complete detached cursor is saved
 before processing to expose document/image/attachment inventory, and after each
 successful ingestion. A confirmed document-content rejection is
 recorded in the cursor's `failed` map, keeps the previous successful hash and
-allows later files to continue; it is retried on the next scan. Infrastructure,
+allows later files to continue. When the service supplies a persistent sync-run
+ID, `failed_attempts` records the rejected path, SHA-256 and run ID, so worker
+continuations only attempt that version once per run. A new run or changed bytes
+retry it; the older successful hash is never replaced by a failed attempt.
+Callers without a sync-run ID retain retry-on-each-scan behavior. Infrastructure,
 authorization, configuration and publication errors abort the scan. Neither
 kind acknowledges the failed file. The optional `VerifyFetchedItem` method rechecks
 the original bytes and source/ACL policy after asynchronous parsing and before
 publication. The scanner refuses path traversal, symbolic links, non-regular
 files, missing/changed mounts and missing/empty sentinels. A second metadata
 inventory must match before a scan is marked complete.
+
+When the service explicitly reports that a document needs image recognition
+while the knowledge base's vision policy is disabled, `deferred` retains its
+path, SHA-256 and reason separately from failures and successful hashes. An
+incremental scan does not create another candidate for unchanged deferred bytes
+while vision remains disabled. Changed bytes, enabled vision or an explicit full
+scan permit another attempt. Deferring an update preserves the old publication;
+it never acknowledges the new bytes as parsed or replaces the original file.
 
 When `attachments` is selected, navigation/download-list and image-only Wiki
 pages are retained as source context; referenced image files are processed
